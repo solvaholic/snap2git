@@ -1,0 +1,419 @@
+#!/usr/bin/env bash
+#
+# snap2git - Use Git as invisible snapshot plumbing for file collections.
+#
+# The cloud drive folder IS the work tree. A bare Git repo elsewhere
+# stores the history. No .git folder pollutes your cloud drive.
+#
+set -euo pipefail
+
+SNAP2GIT_VERSION="0.1.0"
+SNAP2GIT_HOME="${SNAP2GIT_HOME:-$HOME/.snap2git}"
+SNAP2GIT_CONFIG="${SNAP2GIT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/snap2git/config}"
+LARGE_FILE_WARN_BYTES=$((50 * 1024 * 1024))  # 50 MB
+
+# --- Helpers ---------------------------------------------------------------
+
+die() { echo "error: $*" >&2; exit 1; }
+warn() { echo "warning: $*" >&2; }
+info() { echo "$*"; }
+
+# Run git with the right --git-dir and --work-tree for a named repo.
+snap_git() {
+  local name="$1"; shift
+  local gitdir worktree
+  gitdir="$(repo_gitdir "$name")"
+  worktree="$(repo_worktree "$name")"
+  git --git-dir="$gitdir" --work-tree="$worktree" "$@"
+}
+
+# Expand ~ in paths (config values aren't shell-expanded by default).
+expand_path() {
+  local p="$1"
+  if [[ "$p" == "~/"* ]]; then
+    p="$HOME/${p#\~/}"
+  fi
+  echo "$p"
+}
+
+# --- Config ----------------------------------------------------------------
+
+# Read a key from a [repo:<name>] section in the config file.
+config_get() {
+  local name="$1" key="$2" default="${3:-}"
+  if [[ ! -f "$SNAP2GIT_CONFIG" ]]; then
+    echo "$default"
+    return
+  fi
+  local value
+  value=$(awk -v section="repo:$name" -v key="$key" '
+    BEGIN { in_section = 0 }
+    /^\[/ {
+      gsub(/[][]/, "", $0)
+      in_section = ($0 == section) ? 1 : 0
+      next
+    }
+    in_section && $0 ~ "^" key " *= *" {
+      sub(/^[^=]*= */, "")
+      print
+      exit
+    }
+  ' "$SNAP2GIT_CONFIG")
+  echo "${value:-$default}"
+}
+
+# Write or update a key in a [repo:<name>] section.
+config_set() {
+  local name="$1" key="$2" value="$3"
+  local config_dir
+  config_dir="$(dirname "$SNAP2GIT_CONFIG")"
+  mkdir -p "$config_dir"
+
+  if [[ ! -f "$SNAP2GIT_CONFIG" ]]; then
+    printf '[repo:%s]\n%s = %s\n' "$name" "$key" "$value" > "$SNAP2GIT_CONFIG"
+    return
+  fi
+
+  # Check if section exists
+  if grep -q "^\[repo:${name}\]" "$SNAP2GIT_CONFIG"; then
+    # Check if key exists in section
+    local tmp
+    tmp=$(mktemp)
+    awk -v section="repo:$name" -v key="$key" -v val="$value" '
+      BEGIN { in_section = 0; found = 0 }
+      /^\[/ {
+        if (in_section && !found) {
+          printf "%s = %s\n", key, val
+          found = 1
+        }
+        header = $0
+        gsub(/[][]/, "", header)
+        in_section = (header == section) ? 1 : 0
+        print; next
+      }
+      in_section && $0 ~ "^" key " *= *" {
+        printf "%s = %s\n", key, val
+        found = 1; next
+      }
+      { print }
+      END { if (in_section && !found) printf "%s = %s\n", key, val }
+    ' "$SNAP2GIT_CONFIG" > "$tmp"
+    mv "$tmp" "$SNAP2GIT_CONFIG"
+  else
+    # Append new section
+    printf '\n[repo:%s]\n%s = %s\n' "$name" "$key" "$value" >> "$SNAP2GIT_CONFIG"
+  fi
+}
+
+# List all configured repo names.
+config_list_repos() {
+  if [[ ! -f "$SNAP2GIT_CONFIG" ]]; then
+    return
+  fi
+  grep '^\[repo:' "$SNAP2GIT_CONFIG" | sed 's/\[repo:\(.*\)\]/\1/'
+}
+
+repo_gitdir() {
+  local name="$1"
+  echo "$SNAP2GIT_HOME/${name}.git"
+}
+
+repo_worktree() {
+  local name="$1"
+  local wt
+  wt="$(config_get "$name" "worktree" "")"
+  [[ -z "$wt" ]] && die "no worktree configured for repo '$name'"
+  expand_path "$wt"
+}
+
+# --- Default exclude rules -------------------------------------------------
+
+write_default_excludes() {
+  local gitdir="$1"
+  local exclude_file="$gitdir/info/exclude"
+  mkdir -p "$gitdir/info"
+  cat > "$exclude_file" << 'EXCLUDES'
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Cloud provider sync markers
+.dropbox
+.dropbox.attr
+.dropbox.cache/
+.icloud
+*.icloud
+
+# Temp and lock files
+*~
+*.swp
+*.tmp
+~$*.doc*
+~$*.xls*
+~$*.ppt*
+*.lock
+
+# Common large binary formats (optional - comment out if needed)
+# *.iso
+# *.dmg
+# *.vmdk
+EXCLUDES
+  info "Wrote default exclude rules to $exclude_file"
+}
+
+# --- Commands --------------------------------------------------------------
+
+cmd_init() {
+  local name="${1:-}" worktree_arg="${2:-}"
+  [[ -z "$name" ]] && die "usage: snap2git init <name> <worktree-path>"
+  [[ -z "$worktree_arg" ]] && die "usage: snap2git init <name> <worktree-path>"
+
+  local worktree gitdir
+  worktree="$(expand_path "$worktree_arg")"
+
+  [[ ! -d "$worktree" ]] && die "worktree path does not exist: $worktree"
+
+  # Resolve to absolute path so config works from any working directory
+  worktree="$(cd "$worktree" && pwd -P)"
+  gitdir="$(repo_gitdir "$name")"
+  [[ -d "$gitdir" ]] && die "git dir already exists: $gitdir (use a different name)"
+
+  info "Initializing snap2git repo '$name'"
+  info "  worktree: $worktree"
+  info "  git-dir:  $gitdir"
+
+  # Create bare repo
+  mkdir -p "$gitdir"
+  git init --bare "$gitdir" --quiet
+
+  # Configure for cloud drive use
+  git --git-dir="$gitdir" config core.fileMode false
+  git --git-dir="$gitdir" config core.autocrlf input
+  git --git-dir="$gitdir" config core.precomposeunicode true
+
+  # Write exclude rules
+  write_default_excludes "$gitdir"
+
+  # Save to config
+  config_set "$name" "worktree" "$worktree"
+  config_set "$name" "branch" "main"
+  config_set "$name" "commit_template" "Snapshot: %Y-%m-%d %H:%M:%S"
+
+  # Create initial empty commit so the branch exists
+  git --git-dir="$gitdir" --work-tree="$worktree" \
+    commit --allow-empty -m "snap2git: initialized repo '$name'" --quiet
+
+  info "Done! Take your first snapshot with: snap2git snapshot $name"
+}
+
+cmd_snapshot() {
+  local dry_run=false stage_only=false message=""
+  local name=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run|-n) dry_run=true; shift ;;
+      --stage-only|-s) stage_only=true; shift ;;
+      --message|-m) message="$2"; shift 2 ;;
+      -*) die "unknown option: $1" ;;
+      *) name="$1"; shift ;;
+    esac
+  done
+
+  [[ -z "$name" ]] && die "usage: snap2git snapshot <name> [--dry-run] [--stage-only] [--message MSG]"
+
+  local gitdir worktree
+  gitdir="$(repo_gitdir "$name")"
+  worktree="$(repo_worktree "$name")"
+  [[ ! -d "$gitdir" ]] && die "repo '$name' not initialized (run snap2git init first)"
+
+  # Check for changes
+  local changes
+  changes="$(snap_git "$name" status --porcelain)"
+  if [[ -z "$changes" ]]; then
+    info "No changes to snapshot in '$name'."
+    return 0
+  fi
+
+  local change_count
+  change_count="$(echo "$changes" | wc -l | tr -d ' ')"
+
+  if $dry_run; then
+    info "[dry run] $change_count file(s) changed in '$name':"
+    echo "$changes"
+    return 0
+  fi
+
+  # Warn about large files
+  local large_files
+  large_files=$(echo "$changes" | awk '{print $2}' | while read -r f; do
+    local full_path="$worktree/$f"
+    if [[ -f "$full_path" ]]; then
+      local size
+      size=$(stat -f%z "$full_path" 2>/dev/null || stat -c%s "$full_path" 2>/dev/null || echo 0)
+      if [[ "$size" -gt "$LARGE_FILE_WARN_BYTES" ]]; then
+        local mb=$((size / 1024 / 1024))
+        echo "  ${mb}MB  $f"
+      fi
+    fi
+  done)
+  if [[ -n "$large_files" ]]; then
+    warn "Large files detected (>50MB):"
+    echo "$large_files" >&2
+  fi
+
+  # Stage all changes
+  snap_git "$name" add -A
+  info "Staged $change_count file(s) in '$name'."
+
+  if $stage_only; then
+    info "Changes staged but not committed (--stage-only)."
+    return 0
+  fi
+
+  # Build commit message
+  if [[ -z "$message" ]]; then
+    local template
+    template="$(config_get "$name" "commit_template" "Snapshot: %Y-%m-%d %H:%M:%S")"
+    message="$(date +"$template")"
+  fi
+
+  snap_git "$name" commit -m "$message" --quiet
+  info "Snapshot committed: $message"
+}
+
+cmd_status() {
+  local name="${1:-}"
+  [[ -z "$name" ]] && die "usage: snap2git status <name>"
+
+  local gitdir
+  gitdir="$(repo_gitdir "$name")"
+  [[ ! -d "$gitdir" ]] && die "repo '$name' not initialized"
+
+  local changes
+  changes="$(snap_git "$name" status --porcelain)"
+  if [[ -z "$changes" ]]; then
+    info "No changes since last snapshot in '$name'."
+  else
+    local count
+    count="$(echo "$changes" | wc -l | tr -d ' ')"
+    info "$count file(s) changed in '$name':"
+    echo "$changes"
+  fi
+}
+
+cmd_log() {
+  local name="${1:-}" count="${2:-20}"
+  [[ -z "$name" ]] && die "usage: snap2git log <name> [count]"
+
+  local gitdir
+  gitdir="$(repo_gitdir "$name")"
+  [[ ! -d "$gitdir" ]] && die "repo '$name' not initialized"
+
+  snap_git "$name" log \
+    --oneline \
+    --format="%C(dim)%h%C(reset) %C(green)%cd%C(reset) %s" \
+    --date=format:"%Y-%m-%d %H:%M:%S" \
+    -n "$count"
+}
+
+cmd_verify() {
+  local name="${1:-}"
+  [[ -z "$name" ]] && die "usage: snap2git verify <name>"
+
+  local gitdir
+  gitdir="$(repo_gitdir "$name")"
+  [[ ! -d "$gitdir" ]] && die "repo '$name' not initialized"
+
+  info "Verifying integrity of '$name' ($(du -sh "$gitdir" | cut -f1))..."
+  if snap_git "$name" fsck --no-progress 2>&1; then
+    info "Integrity check passed."
+  else
+    die "Integrity check FAILED for '$name'. See errors above."
+  fi
+}
+
+cmd_list() {
+  local repos
+  repos="$(config_list_repos)"
+  if [[ -z "$repos" ]]; then
+    info "No repos configured. Run 'snap2git init <name> <path>' to get started."
+    return 0
+  fi
+
+  info "Configured repos:"
+  echo "$repos" | while read -r name; do
+    local worktree gitdir
+    worktree="$(expand_path "$(config_get "$name" "worktree" "(unknown)")")"
+    gitdir="$(repo_gitdir "$name")"
+    local status="ok"
+    [[ ! -d "$gitdir" ]] && status="missing git-dir"
+    [[ ! -d "$worktree" ]] && status="missing worktree"
+    printf "  %-20s %s  [%s]\n" "$name" "$worktree" "$status"
+  done
+}
+
+cmd_help() {
+  cat << 'HELP'
+snap2git - Git-powered snapshots for file collections
+
+Usage:
+  snap2git <command> [options]
+
+Commands:
+  init <name> <path>     Initialize a new snapshot repo
+  snapshot <name>        Take a snapshot (default command)
+  status <name>          Show changes since last snapshot
+  log <name> [count]     Show snapshot history
+  verify <name>          Check repository integrity
+  list                   List configured repos
+  help                   Show this help
+  version                Show version
+
+Snapshot options:
+  --dry-run, -n          Show what would happen without doing it
+  --stage-only, -s       Stage changes but don't commit
+  --message, -m MSG      Use a custom commit message
+
+Examples:
+  snap2git init my-notes ~/Library/Mobile\ Documents/Notes
+  snap2git snapshot my-notes
+  snap2git snapshot my-notes --dry-run
+  snap2git status my-notes
+  snap2git log my-notes
+
+Environment:
+  SNAP2GIT_HOME          Base dir for git repos (default: ~/.snap2git)
+  SNAP2GIT_CONFIG        Config file path (default: ~/.config/snap2git/config)
+HELP
+}
+
+# --- Main ------------------------------------------------------------------
+
+main() {
+  local cmd="${1:-help}"
+  shift 2>/dev/null || true
+
+  case "$cmd" in
+    init)       cmd_init "$@" ;;
+    snapshot)   cmd_snapshot "$@" ;;
+    status)     cmd_status "$@" ;;
+    log)        cmd_log "$@" ;;
+    verify)     cmd_verify "$@" ;;
+    list)       cmd_list "$@" ;;
+    help|--help|-h) cmd_help ;;
+    version|--version|-v) echo "snap2git $SNAP2GIT_VERSION" ;;
+    *)
+      # Default subcommand is snapshot
+      cmd_snapshot "$cmd" "$@"
+      ;;
+  esac
+}
+
+main "$@"
