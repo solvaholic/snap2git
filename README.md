@@ -38,6 +38,20 @@ source - no copies, no rsync, no duplication.
 
 Cloud sync markers, OS junk, and temp files are automatically excluded.
 
+## Line Endings (CRLF/LF)
+
+snap2git sets `core.autocrlf = input` on init, which normalizes Windows-style
+line endings (CRLF) to Unix-style (LF) when Git stores them. You may see
+warnings like:
+
+```
+warning: in the working copy of 'file.csv', CRLF will be replaced by LF the next time Git touches it
+```
+
+This is expected and harmless. Your original files are never modified - snap2git
+doesn't do checkouts. The normalization just keeps diffs clean when the same
+files are edited on different platforms.
+
 ## Commands
 
 | Command | Description |

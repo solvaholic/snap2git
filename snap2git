@@ -410,8 +410,12 @@ main() {
     help|--help|-h) cmd_help ;;
     version|--version|-v) echo "snap2git $SNAP2GIT_VERSION" ;;
     *)
-      # Default subcommand is snapshot
-      cmd_snapshot "$cmd" "$@"
+      # If it looks like a known repo name, treat as snapshot shorthand
+      if [[ -d "$(repo_gitdir "$cmd")" ]]; then
+        cmd_snapshot "$cmd" "$@"
+      else
+        die "unknown command: '$cmd' (see 'snap2git help')"
+      fi
       ;;
   esac
 }
