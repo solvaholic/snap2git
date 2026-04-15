@@ -7,7 +7,7 @@ Uses `--git-dir` / `--work-tree` to keep cloud drives clean.
 Config at `~/.config/snap2git/config`, bare repos at `~/.snap2git/`.
 
 
-## v0.2 - Polish and hardening
+## v0.2 - Polish and hardening (shipped)
 
 ### Multi-repo convenience
 - Let commands operate on all repos when name is omitted
