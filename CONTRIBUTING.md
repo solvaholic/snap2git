@@ -6,15 +6,21 @@ snap2git is a single Bash script with no build step. You just need:
 
 - **Bash** (4.0+)
 - **Git**
-- **bats-core** for tests: `brew install bats-core` (macOS) or see
-  [bats-core installation](https://bats-core.readthedocs.io/en/stable/installation.html)
+- **bats-core** for tests: `brew install bats-core` (macOS) or
+  `sudo apt-get install bats` (Ubuntu)
+- **ShellCheck** for linting: `brew install shellcheck` (macOS) or
+  `sudo apt-get install shellcheck` (Ubuntu)
 
-## Running Tests
+## Running Checks Locally
 
 ```bash
-# Run the full test suite
-bats tests/
+# Run everything CI runs, in order:
+bash -n snap2git          # syntax check
+shellcheck snap2git       # lint
+bats tests/               # tests
+```
 
+```bash
 # Run a specific test file
 bats tests/error_handling.bats
 

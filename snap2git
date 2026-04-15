@@ -42,6 +42,7 @@ snap_git() {
 # Expand ~ in paths (config values aren't shell-expanded by default).
 expand_path() {
   local p="$1"
+  # shellcheck disable=SC2088 # Intentional: matching literal ~/ prefix, not expanding
   if [[ "$p" == "~/"* ]]; then
     p="$HOME/${p#\~/}"
   fi
