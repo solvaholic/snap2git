@@ -679,6 +679,161 @@ _verify_one() {
   fi
 }
 
+cmd_diff() {
+  local name="" stat_mode=false name_only=false
+  local ref1="" ref2=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --stat)      stat_mode=true; shift ;;
+      --name-only) name_only=true; shift ;;
+      -*) die "unknown option: $1" ;;
+      *)
+        if [[ -z "$name" ]]; then
+          name="$1"
+        elif [[ -z "$ref1" ]]; then
+          ref1="$1"
+        else
+          ref2="$1"
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  [[ -z "$name" ]] && die "usage: snap2git diff <name> [ref1] [ref2] [--stat] [--name-only]"
+  require_repo "$name"
+
+  # Default: diff last two snapshots
+  if [[ -z "$ref1" ]]; then
+    # Check we have at least 2 commits
+    local commit_count
+    commit_count="$(snap_git "$name" rev-list --count HEAD 2>/dev/null || echo 0)"
+    if [[ "$commit_count" -lt 2 ]]; then
+      info "Only $commit_count snapshot(s) in '$name' - nothing to diff."
+      return 0
+    fi
+    ref1="HEAD~1"
+    ref2="HEAD"
+  elif [[ -z "$ref2" ]]; then
+    ref2="HEAD"
+  fi
+
+  local diff_opts=()
+  if $stat_mode; then
+    diff_opts+=(--stat)
+  fi
+  if $name_only; then
+    diff_opts+=(--name-only)
+  fi
+
+  snap_git "$name" diff ${diff_opts[@]+"${diff_opts[@]}"} "$ref1" "$ref2"
+}
+
+cmd_checkout() {
+  local name="" action="create" ref=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --list|-l)    action="list"; shift ;;
+      --cleanup|-c) action="cleanup"; shift ;;
+      -*) die "unknown option: $1" ;;
+      *)
+        if [[ -z "$name" ]]; then
+          name="$1"
+        else
+          ref="$1"
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  [[ -z "$name" ]] && die "usage: snap2git checkout <name> <ref> | --list | --cleanup"
+  require_repo "$name"
+
+  case "$action" in
+    list)    _checkout_list "$name" ;;
+    cleanup) _checkout_cleanup "$name" ;;
+    create)
+      [[ -z "$ref" ]] && die "usage: snap2git checkout <name> <ref>"
+      _checkout_create "$name" "$ref"
+      ;;
+  esac
+}
+
+_checkout_create() {
+  local name="$1" ref="$2"
+  local gitdir
+  gitdir="$(repo_gitdir "$name")"
+
+  # Resolve the ref to a short hash for the directory name
+  local resolved
+  resolved="$(snap_git "$name" rev-parse --short "$ref" 2>/dev/null)" \
+    || die "unknown ref '$ref' in repo '$name'"
+
+  local checkout_dir="$SNAP2GIT_HOME/${name}.checkout-${resolved}"
+
+  if [[ -d "$checkout_dir" ]]; then
+    info "Checkout already exists: $checkout_dir"
+    return 0
+  fi
+
+  # Create the worktree
+  git --git-dir="$gitdir" worktree add --detach "$checkout_dir" "$ref" --quiet 2>/dev/null \
+    || die "failed to create checkout for '$ref' in repo '$name'"
+
+  info "Checked out '$ref' ($resolved) to:"
+  info "  $checkout_dir"
+}
+
+_checkout_list() {
+  local name="$1"
+  local gitdir
+  gitdir="$(repo_gitdir "$name")"
+
+  local worktrees
+  worktrees="$(git --git-dir="$gitdir" worktree list 2>/dev/null)"
+
+  # Filter to only our checkout directories
+  local found=false
+  while IFS= read -r line; do
+    if [[ "$line" == *"${name}.checkout-"* ]]; then
+      echo "$line"
+      found=true
+    fi
+  done <<< "$worktrees"
+
+  if ! $found; then
+    info "No active checkouts for '$name'."
+  fi
+}
+
+_checkout_cleanup() {
+  local name="$1"
+  local gitdir
+  gitdir="$(repo_gitdir "$name")"
+  local cleaned=0
+
+  # Find and remove checkout directories
+  local prefix="$SNAP2GIT_HOME/${name}.checkout-"
+  for dir in "$prefix"*/; do
+    [[ -d "$dir" ]] || continue
+    git --git-dir="$gitdir" worktree remove "$dir" --force 2>/dev/null \
+      || rm -rf "$dir"
+    cleaned=$((cleaned + 1))
+  done
+
+  # Prune any stale worktree references
+  git --git-dir="$gitdir" worktree prune 2>/dev/null
+
+  if [[ "$cleaned" -eq 0 ]]; then
+    info "No checkouts to clean up for '$name'."
+  else
+    info "Cleaned up $cleaned checkout(s) for '$name'."
+  fi
+}
+
 cmd_list() {
   local repos
   repos="$(config_list_repos)"
@@ -711,7 +866,11 @@ Commands:
   snapshot <name>        Take a snapshot (default command)
   status <name>          Show changes since last snapshot
   log <name> [count]     Show snapshot history
+  diff <name> [r1] [r2]  Compare two snapshots
   verify <name>          Check repository integrity
+  checkout <name> <ref>  Check out a snapshot to a temp dir
+  checkout <name> --list Show active checkouts
+  checkout <name> --cleanup  Remove temp checkouts
   list                   List configured repos
   config <name>          Show config for a repo
   config <name> <k> <v>  Set a config value
@@ -734,6 +893,10 @@ Snapshot options:
 
 Status/verify options:
   --all, -a              Operate on all repos
+
+Diff options:
+  --stat                 Show summary of changes
+  --name-only            Show only changed file paths
 
 Note: When name is omitted, snapshot/status/verify operate on all repos.
 
@@ -816,6 +979,8 @@ main() {
     status)     cmd_status "$@" ;;
     log)        cmd_log "$@" ;;
     verify)     cmd_verify "$@" ;;
+    diff)       cmd_diff "$@" ;;
+    checkout)   cmd_checkout "$@" ;;
     list)       cmd_list "$@" ;;
     config)     cmd_config "$@" ;;
     exclude)    cmd_exclude "$@" ;;
