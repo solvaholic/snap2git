@@ -20,6 +20,11 @@ Config at `~/.config/snap2git/config`, bare repos at `~/.snap2git/`.
 - `snap2git exclude <name> --edit` - open in $EDITOR
 - Ship a richer default exclude list (iCloud `.icloud` stubs, OneDrive
   placeholders, common IDE and editor temp files)
+- `snap2git exclude <name> --preset <type>` - apply a curated set of
+  exclude patterns for known collection types
+- Built-in preset: `calibre` - excludes Calibre app state that bloats
+  repos without adding library value (`.cache/`, `.config/`, `.calnotes/`,
+  `full-text-search.db`)
 
 ### Config improvements
 - `snap2git config <name>` - show config for a repo
@@ -70,10 +75,18 @@ Config at `~/.config/snap2git/config`, bare repos at `~/.snap2git/`.
 - `snap2git gc <name>` - run git gc with aggressive options
 - Configurable auto-gc (e.g. every N snapshots or every N days)
 - `snap2git gc --all` for all repos
+- Set binary-aware `.gitattributes` in the bare repo during gc (or at
+  init time) to mark known compressed formats (epub, pdf, zip, cbz, jpg,
+  png, mp3, mp4) with `-delta` - skips futile delta compression and saves
+  significant CPU on binary-heavy repos
 
 ### Repo statistics
 - `snap2git info <name>` - show repo size, snapshot count, date range,
   largest files, file count over time
+- Break down size and file count by extension so users can see what's
+  eating space (e.g. "48.5 GB across 2,066 .epub files")
+- Flag potential excludes: files that look like app state or temp data
+  rather than user content
 
 
 ## v0.5 - Usability
