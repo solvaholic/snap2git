@@ -238,6 +238,9 @@ write_default_excludes() {
   local exclude_file="$gitdir/info/exclude"
   mkdir -p "$gitdir/info"
   cat > "$exclude_file" << 'EXCLUDES'
+# snap2git default excludes
+# Edit with: snap2git exclude <name> --edit
+
 # OS generated files
 .DS_Store
 .DS_Store?
@@ -247,22 +250,36 @@ write_default_excludes() {
 ehthumbs.db
 Thumbs.db
 desktop.ini
+$RECYCLE.BIN/
 
-# Cloud provider sync markers
+# Cloud provider sync markers and placeholders
 .dropbox
 .dropbox.attr
 .dropbox.cache/
 .icloud
 *.icloud
+.fuse_hidden*
+.OneDrive*
+*.tmp.drivedownload
+*.tmp.driveupload
 
 # Temp and lock files
 *~
 *.swp
+*.swo
 *.tmp
+*.bak
 ~$*.doc*
 ~$*.xls*
 ~$*.ppt*
 *.lock
+
+# IDE and editor state
+.idea/
+.vscode/*.log
+*.pyc
+__pycache__/
+.*.sw?
 
 # Common large binary formats (optional - comment out if needed)
 # *.iso
@@ -270,6 +287,100 @@ desktop.ini
 # *.vmdk
 EXCLUDES
   info "Wrote default exclude rules to $exclude_file"
+}
+
+# --- Exclude presets -------------------------------------------------------
+
+preset_calibre() {
+  cat << 'PRESET'
+
+# -- preset: calibre --
+# Calibre app state (not library content)
+.cache/
+.config/
+.calnotes/
+full-text-search.db
+metadata_db_prefs_backup.json
+PRESET
+}
+
+# Add new presets as functions: preset_<name>()
+
+preset_list() {
+  echo "Available presets:"
+  echo "  calibre  - Excludes Calibre app state (.cache, .config, .calnotes, etc.)"
+}
+
+# --- Exclude subcommand ----------------------------------------------------
+
+exclude_file_for() {
+  local name="$1"
+  local gitdir
+  gitdir="$(repo_gitdir "$name")"
+  echo "$gitdir/info/exclude"
+}
+
+cmd_exclude() {
+  local name="" pattern="" action="add"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --list|-l)   action="list"; shift ;;
+      --edit|-e)   action="edit"; shift ;;
+      --reset)     action="reset"; shift ;;
+      --preset|-p) action="preset"; shift; local preset_name="${1:-}"; [[ -n "${1:-}" ]] && shift ;;
+      -*) die "unknown option: $1" ;;
+      *)
+        if [[ -z "$name" ]]; then
+          name="$1"
+        else
+          pattern="$1"
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  [[ -z "$name" ]] && die "usage: snap2git exclude <name> [<pattern>] [--list|--edit|--reset|--preset <type>]"
+  require_repo "$name"
+
+  local exclude_file
+  exclude_file="$(exclude_file_for "$name")"
+
+  case "$action" in
+    list)
+      if [[ -f "$exclude_file" ]]; then
+        cat "$exclude_file"
+      else
+        info "No exclude rules for '$name'."
+      fi
+      ;;
+    edit)
+      [[ -z "${EDITOR:-}" ]] && die "EDITOR is not set"
+      info "Editing $exclude_file"
+      "$EDITOR" "$exclude_file"
+      ;;
+    reset)
+      local gitdir
+      gitdir="$(repo_gitdir "$name")"
+      write_default_excludes "$gitdir"
+      info "Reset excludes to defaults for '$name'."
+      ;;
+    preset)
+      [[ -z "${preset_name:-}" ]] && { preset_list; return 0; }
+      local preset_func="preset_${preset_name}"
+      if ! declare -f "$preset_func" >/dev/null 2>&1; then
+        die "unknown preset: '$preset_name'"
+      fi
+      "$preset_func" >> "$exclude_file"
+      info "Applied preset '$preset_name' to '$name'."
+      ;;
+    add)
+      [[ -z "$pattern" ]] && die "usage: snap2git exclude <name> <pattern>"
+      echo "$pattern" >> "$exclude_file"
+      info "Added exclude pattern '$pattern' to '$name'."
+      ;;
+  esac
 }
 
 # --- Commands --------------------------------------------------------------
@@ -523,6 +634,11 @@ Commands:
   list                   List configured repos
   config <name>          Show config for a repo
   config <name> <k> <v>  Set a config value
+  exclude <name> <pat>   Add an exclude pattern
+  exclude <name> --list  Show current excludes
+  exclude <name> --edit  Open excludes in \$EDITOR
+  exclude <name> --reset Reset to default excludes
+  exclude <name> -p TYPE Apply a preset (e.g. calibre)
   help                   Show this help
   version                Show version
 
@@ -615,6 +731,7 @@ main() {
     verify)     cmd_verify "$@" ;;
     list)       cmd_list "$@" ;;
     config)     cmd_config "$@" ;;
+    exclude)    cmd_exclude "$@" ;;
     help|-h)    cmd_help ;;
     version|-v) echo "snap2git $SNAP2GIT_VERSION" ;;
     *)
