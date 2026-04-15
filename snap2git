@@ -443,6 +443,10 @@ cmd_init() {
   git --git-dir="$gitdir" config core.autocrlf input
   git --git-dir="$gitdir" config core.precomposeunicode true
 
+  # Set a local identity so commits work in CI and fresh environments
+  git --git-dir="$gitdir" config user.name "snap2git"
+  git --git-dir="$gitdir" config user.email "snap2git@localhost"
+
   # Write exclude rules
   write_default_excludes "$gitdir"
 

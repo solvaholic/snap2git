@@ -8,10 +8,11 @@ load test_helper
 @test "config: comments with # are preserved through config_set" {
   init_test_repo myrepo
 
-  # Add a comment manually
-  sed -i '' '2i\
-# This is a comment
-' "$SNAP2GIT_CONFIG"
+  # Add a comment manually (portable - no sed -i)
+  local tmp
+  tmp=$(mktemp)
+  awk 'NR==2{print "# This is a comment"} {print}' "$SNAP2GIT_CONFIG" > "$tmp"
+  mv "$tmp" "$SNAP2GIT_CONFIG"
 
   # Update a key
   run bash "$SNAP2GIT" config myrepo commit_template "New: %Y-%m-%d"
@@ -24,9 +25,10 @@ load test_helper
 @test "config: comments with ; are preserved through config_set" {
   init_test_repo myrepo
 
-  sed -i '' '2i\
-; semicolon comment
-' "$SNAP2GIT_CONFIG"
+  local tmp
+  tmp=$(mktemp)
+  awk 'NR==2{print "; semicolon comment"} {print}' "$SNAP2GIT_CONFIG" > "$tmp"
+  mv "$tmp" "$SNAP2GIT_CONFIG"
 
   run bash "$SNAP2GIT" config myrepo commit_template "New: %Y-%m-%d"
   [ "$status" -eq 0 ]
