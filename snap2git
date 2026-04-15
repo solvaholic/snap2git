@@ -60,6 +60,8 @@ config_get() {
   local value
   value=$(awk -v section="repo:$name" -v key="$key" '
     BEGIN { in_section = 0 }
+    /^[#;]/ { next }
+    /^[[:space:]]*$/ { next }
     /^\[/ {
       gsub(/[][]/, "", $0)
       in_section = ($0 == section) ? 1 : 0
@@ -124,6 +126,79 @@ config_list_repos() {
     return
   fi
   grep '^\[repo:' "$SNAP2GIT_CONFIG" | sed 's/\[repo:\(.*\)\]/\1/'
+}
+
+# Validate config file structure. Returns errors on stderr.
+# With --force, warnings are printed but execution continues.
+config_validate() {
+  if [[ ! -f "$SNAP2GIT_CONFIG" ]]; then
+    return 0
+  fi
+
+  local errors=0
+  local line_num=0
+  local current_section=""
+
+  while IFS= read -r line; do
+    line_num=$((line_num + 1))
+
+    # Skip comments and blank lines
+    [[ "$line" =~ ^[#\;] ]] && continue
+    [[ -z "${line// /}" ]] && continue
+
+    # Section header
+    if [[ "$line" =~ ^\[.*\]$ ]]; then
+      current_section="${line//[\[\]]/}"
+      if [[ ! "$current_section" =~ ^repo: ]]; then
+        warn "config line $line_num: unknown section type '[$current_section]' (expected [repo:NAME])"
+        errors=$((errors + 1))
+      fi
+      continue
+    fi
+
+    # Key = value
+    if [[ "$line" =~ ^[a-z_]+[[:space:]]*= ]]; then
+      continue
+    fi
+
+    warn "config line $line_num: unrecognized line: $line"
+    errors=$((errors + 1))
+  done < "$SNAP2GIT_CONFIG"
+
+  # Check each repo section has a worktree key
+  local repos
+  repos="$(config_list_repos)"
+  if [[ -n "$repos" ]]; then
+    while IFS= read -r name; do
+      local wt
+      wt="$(config_get "$name" "worktree" "")"
+      if [[ -z "$wt" ]]; then
+        warn "config: repo '$name' is missing required 'worktree' key"
+        errors=$((errors + 1))
+      fi
+    done <<< "$repos"
+  fi
+
+  return "$errors"
+}
+
+# Show config for a repo, or set a key.
+config_show() {
+  local name="$1"
+  if [[ ! -f "$SNAP2GIT_CONFIG" ]]; then
+    die "no config file found at $SNAP2GIT_CONFIG"
+  fi
+  awk -v section="repo:$name" '
+    BEGIN { in_section = 0 }
+    /^\[/ {
+      header = $0
+      gsub(/[][]/, "", header)
+      in_section = (header == section) ? 1 : 0
+      if (in_section) print $0
+      next
+    }
+    in_section { print }
+  ' "$SNAP2GIT_CONFIG"
 }
 
 repo_gitdir() {
@@ -437,7 +512,7 @@ cmd_help() {
 snap2git - Git-powered snapshots for file collections
 
 Usage:
-  snap2git <command> [options]
+  snap2git [--force] <command> [options]
 
 Commands:
   init <name> <path>     Initialize a new snapshot repo
@@ -446,13 +521,23 @@ Commands:
   log <name> [count]     Show snapshot history
   verify <name>          Check repository integrity
   list                   List configured repos
+  config <name>          Show config for a repo
+  config <name> <k> <v>  Set a config value
   help                   Show this help
   version                Show version
+
+Global options:
+  --force                Skip config validation
 
 Snapshot options:
   --dry-run, -n          Show what would happen without doing it
   --stage-only, -s       Stage changes but don't commit
   --message, -m MSG      Use a custom commit message
+
+Config file:
+  Location: ~/.config/snap2git/config (or $SNAP2GIT_CONFIG)
+  Format: INI-style with [repo:NAME] sections.
+  Lines starting with # or ; are comments.
 
 Examples:
   snap2git init my-notes ~/Library/Mobile\ Documents/Notes
@@ -460,6 +545,8 @@ Examples:
   snap2git snapshot my-notes --dry-run
   snap2git status my-notes
   snap2git log my-notes
+  snap2git config my-notes
+  snap2git config my-notes commit_template "Backup: %Y-%m-%d"
 
 Environment:
   SNAP2GIT_HOME          Base dir for git repos (default: ~/.snap2git)
@@ -467,11 +554,58 @@ Environment:
 HELP
 }
 
+cmd_config() {
+  local name="${1:-}"
+  [[ -z "$name" ]] && die "usage: snap2git config <name> [<key> <value>]"
+
+  local key="${2:-}" value="${3:-}"
+
+  if [[ -z "$key" ]]; then
+    # Show config for this repo
+    local output
+    output="$(config_show "$name")"
+    if [[ -z "$output" ]]; then
+      die "no config found for repo '$name'"
+    fi
+    echo "$output"
+  else
+    [[ -z "$value" ]] && die "usage: snap2git config <name> <key> <value>"
+    config_set "$name" "$key" "$value"
+    info "Set $key = $value for repo '$name'"
+  fi
+}
+
 # --- Main ------------------------------------------------------------------
 
 main() {
+  local force=false
+
+  # Parse global options before the command
+  while [[ "${1:-}" == --* ]]; do
+    case "$1" in
+      --force) force=true; shift ;;
+      --help|-h) cmd_help; return ;;
+      --version|-v) echo "snap2git $SNAP2GIT_VERSION"; return ;;
+      *) break ;;
+    esac
+  done
+
   local cmd="${1:-help}"
   shift 2>/dev/null || true
+
+  # Validate config (skip for init, help, version - they don't need valid config)
+  case "$cmd" in
+    init|help|version) ;;
+    *)
+      if ! config_validate; then
+        if $force; then
+          warn "config validation failed, continuing with --force"
+        else
+          die "config validation failed (use --force to override)"
+        fi
+      fi
+      ;;
+  esac
 
   case "$cmd" in
     init)       cmd_init "$@" ;;
@@ -480,8 +614,9 @@ main() {
     log)        cmd_log "$@" ;;
     verify)     cmd_verify "$@" ;;
     list)       cmd_list "$@" ;;
-    help|--help|-h) cmd_help ;;
-    version|--version|-v) echo "snap2git $SNAP2GIT_VERSION" ;;
+    config)     cmd_config "$@" ;;
+    help|-h)    cmd_help ;;
+    version|-v) echo "snap2git $SNAP2GIT_VERSION" ;;
     *)
       # If it looks like a known repo name, treat as snapshot shorthand
       if [[ -d "$(repo_gitdir "$cmd")" ]]; then
