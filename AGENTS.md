@@ -9,8 +9,8 @@ no `.git` directory in the source, no copies, no syncing.
 
 ## Key files
 
-- `snap2git` - The entire CLI. Single Bash script, ~820 lines. Commands:
-  init, snapshot, status, log, verify, list, config, exclude.
+- `snap2git` - The entire CLI. Single Bash script, ~1000 lines. Commands:
+  init, snapshot, status, log, diff, checkout, verify, list, config, exclude.
 - `README.md` - User-facing docs: quick start, commands, config, excludes,
   presets, multi-repo operations.
 - `CONTRIBUTING.md` - Developer guide: running tests, writing presets, writing
@@ -44,7 +44,9 @@ no `.git` directory in the source, no copies, no syncing.
 
 - **Local-only** - no push/pull, no remotes.
 - **Never modify the worktree** - snap2git reads from cloud folders but never
-  writes to them. No checkouts against the live worktree.
+  writes to them. Checkouts go to a separate temp directory, never the source.
+  The `checkout` command uses `git worktree add --detach` to create an isolated
+  copy at `~/.snap2git/<name>.checkout-<ref>/`.
 - **`core.autocrlf = input`** - normalizes CRLF to LF in Git storage. Warnings
   about this are expected and documented in README.
 - **Scale target** - 10,000 files, thousands of directories.
@@ -52,8 +54,8 @@ no `.git` directory in the source, no copies, no syncing.
 
 ## Current version
 
-v0.2 is shipped. See `docs/PLAN.md` for v0.3+ roadmap items (diff/restore,
-fswatch, scheduled snapshots, garbage collection).
+v0.3 is shipped. See `docs/PLAN.md` for v0.4+ roadmap items (fswatch,
+scheduled snapshots, garbage collection).
 
 ## Testing
 

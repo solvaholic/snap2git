@@ -39,7 +39,7 @@ Config at `~/.config/snap2git/config`, bare repos at `~/.snap2git/`.
 - Trap signals for clean exit during long operations
 
 
-## v0.3 - Diff and checkout
+## v0.3 - Diff and checkout (shipped)
 
 ### `snap2git diff <name> [ref1] [ref2]`
 - Show what changed between two snapshots

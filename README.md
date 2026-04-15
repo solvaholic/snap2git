@@ -63,6 +63,10 @@ files are edited on different platforms.
 | `snapshot [name]` | Take a snapshot (all repos if name omitted) |
 | `status [name]` | Show changes since last snapshot |
 | `log <name> [count]` | Show snapshot history |
+| `diff <name> [ref1] [ref2]` | Compare two snapshots |
+| `checkout <name> <ref>` | Check out a snapshot to a temp dir |
+| `checkout <name> --list` | Show active checkouts |
+| `checkout <name> --cleanup` | Remove temp checkouts |
 | `verify [name]` | Check repo integrity with `git fsck` |
 | `list` | List all configured repos |
 | `config <name>` | Show config for a repo |
@@ -94,6 +98,50 @@ at the end reports any failures.
 - `--dry-run` / `-n` - Preview changes without snapshotting
 - `--stage-only` / `-s` - Stage changes but don't commit
 - `--message` / `-m MSG` - Custom commit message
+
+## Comparing Snapshots
+
+The `diff` command shows what changed between snapshots:
+
+```bash
+# What changed in the last snapshot?
+snap2git diff my-notes
+
+# Summary of changes
+snap2git diff my-notes --stat
+
+# Just the file paths
+snap2git diff my-notes --name-only
+
+# Compare specific snapshots
+snap2git diff my-notes HEAD~3 HEAD
+```
+
+Defaults to comparing the last two snapshots (`HEAD~1..HEAD`). You can use any
+Git ref - commit hashes, `HEAD~N`, tags, etc.
+
+## Checking Out Old Snapshots
+
+The `checkout` command creates a read-only copy of a snapshot in a temp
+directory. Your original files are never modified.
+
+```bash
+# Check out the previous snapshot
+snap2git checkout my-notes HEAD~1
+
+# Check out a specific commit
+snap2git checkout my-notes abc1234
+
+# See what's currently checked out
+snap2git checkout my-notes --list
+
+# Clean up all checkouts
+snap2git checkout my-notes --cleanup
+```
+
+Checkouts live at `~/.snap2git/<name>.checkout-<ref>/`. Copy files out
+manually - the intentional friction prevents accidental overwrites that could
+sync back to your cloud folder.
 
 ## Exclude Rules
 
