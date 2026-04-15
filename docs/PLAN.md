@@ -39,7 +39,7 @@ Config at `~/.config/snap2git/config`, bare repos at `~/.snap2git/`.
 - Trap signals for clean exit during long operations
 
 
-## v0.3 - Diff and restore
+## v0.3 - Diff and checkout
 
 ### `snap2git diff <name> [ref1] [ref2]`
 - Show what changed between two snapshots
@@ -47,16 +47,17 @@ Config at `~/.config/snap2git/config`, bare repos at `~/.snap2git/`.
 - `--stat` for summary, full diff for details
 - `--name-only` for just file paths
 
-### `snap2git checkout <name> <ref> [path]`
-- Check out a snapshot (or specific files) into a temp worktree
-- Uses `git worktree add` for safe, isolated browsing
+### `snap2git checkout <name> <ref>`
+- Check out a snapshot into a temp worktree for browsing
+- Uses `git worktree add --detach` for safe, isolated access
+- Temp worktrees live at `$SNAP2GIT_HOME/<name>.checkout-<short-ref>/`
 - `snap2git checkout <name> --list` to see active checkouts
 - `snap2git checkout <name> --cleanup` to remove temp worktrees
 
-### `snap2git restore <name> <ref> [path]`
-- Restore specific files from a snapshot back to the live worktree
-- Confirmation prompt before overwriting (unless --force)
-- `--dry-run` to preview what would be restored
+To recover files from an old snapshot, check it out and copy what you need.
+This preserves the "never modify the worktree" principle - snap2git never
+writes to your cloud folder, even for restores. The original plan had a
+`restore` command; it was dropped to keep this guarantee.
 
 
 ## v0.4 - Automation and maintenance
