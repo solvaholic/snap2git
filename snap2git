@@ -7,10 +7,22 @@
 #
 set -euo pipefail
 
-SNAP2GIT_VERSION="0.1.0"
+SNAP2GIT_VERSION="0.2.0"
 SNAP2GIT_HOME="${SNAP2GIT_HOME:-$HOME/.snap2git}"
 SNAP2GIT_CONFIG="${SNAP2GIT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/snap2git/config}"
 LARGE_FILE_WARN_BYTES=$((50 * 1024 * 1024))  # 50 MB
+SNAP2GIT_TMPFILES=()
+
+# --- Cleanup and signal handling -------------------------------------------
+
+cleanup() {
+  local exit_status=$?
+  for f in "${SNAP2GIT_TMPFILES[@]:-}"; do
+    [[ -f "$f" ]] && rm -f "$f" 2>/dev/null
+  done
+  exit "$exit_status"
+}
+trap cleanup EXIT INT TERM
 
 # --- Helpers ---------------------------------------------------------------
 
@@ -79,6 +91,7 @@ config_set() {
     # Check if key exists in section
     local tmp
     tmp=$(mktemp)
+    SNAP2GIT_TMPFILES+=("$tmp")
     awk -v section="repo:$name" -v key="$key" -v val="$value" '
       BEGIN { in_section = 0; found = 0 }
       /^\[/ {
@@ -124,6 +137,23 @@ repo_worktree() {
   wt="$(config_get "$name" "worktree" "")"
   [[ -z "$wt" ]] && die "no worktree configured for repo '$name'"
   expand_path "$wt"
+}
+
+# Validate that a repo's git-dir and worktree are present and usable.
+require_repo() {
+  local name="$1"
+  local gitdir worktree
+  gitdir="$(repo_gitdir "$name")"
+  worktree="$(repo_worktree "$name")"
+  if [[ ! -d "$gitdir" ]]; then
+    die "repo '$name' not initialized (run snap2git init first)"
+  fi
+  if ! git --git-dir="$gitdir" rev-parse --git-dir >/dev/null 2>&1; then
+    die "git-dir for '$name' is not a valid Git repository: $gitdir"
+  fi
+  if [[ ! -d "$worktree" ]]; then
+    die "worktree for '$name' not found: $worktree (has the folder moved?)"
+  fi
 }
 
 # --- Default exclude rules -------------------------------------------------
@@ -228,49 +258,89 @@ cmd_snapshot() {
 
   [[ -z "$name" ]] && die "usage: snap2git snapshot <name> [--dry-run] [--stage-only] [--message MSG]"
 
+  require_repo "$name"
   local gitdir worktree
   gitdir="$(repo_gitdir "$name")"
   worktree="$(repo_worktree "$name")"
-  [[ ! -d "$gitdir" ]] && die "repo '$name' not initialized (run snap2git init first)"
 
   # Check for changes
-  local changes
-  changes="$(snap_git "$name" status --porcelain)"
-  if [[ -z "$changes" ]]; then
+  local changes_display change_count
+  changes_display="$(snap_git "$name" status --porcelain)"
+  if [[ -z "$changes_display" ]]; then
     info "No changes to snapshot in '$name'."
     return 0
   fi
 
-  local change_count
-  change_count="$(echo "$changes" | wc -l | tr -d ' ')"
+  change_count="$(echo "$changes_display" | wc -l | tr -d ' ')"
 
   if $dry_run; then
     info "[dry run] $change_count file(s) changed in '$name':"
-    echo "$changes"
+    echo "$changes_display"
     return 0
   fi
 
-  # Warn about large files
-  local large_files
-  large_files=$(echo "$changes" | awk '{print $2}' | while read -r f; do
-    local full_path="$worktree/$f"
+  # Warn about large files (parse path from column 4 onward for space safety)
+  local large_files=""
+  while IFS= read -r line; do
+    local fpath="${line:3}"
+    local full_path="$worktree/$fpath"
     if [[ -f "$full_path" ]]; then
       local size
       size=$(stat -f%z "$full_path" 2>/dev/null || stat -c%s "$full_path" 2>/dev/null || echo 0)
       if [[ "$size" -gt "$LARGE_FILE_WARN_BYTES" ]]; then
         local mb=$((size / 1024 / 1024))
-        echo "  ${mb}MB  $f"
+        large_files+="  ${mb}MB  $fpath"$'\n'
       fi
     fi
-  done)
+  done <<< "$changes_display"
   if [[ -n "$large_files" ]]; then
     warn "Large files detected (>50MB):"
-    echo "$large_files" >&2
+    printf '%s' "$large_files" >&2
   fi
 
-  # Stage all changes
-  snap_git "$name" add -A
-  info "Staged $change_count file(s) in '$name'."
+  # Stage all changes, with retry for locked files
+  local add_stderr
+  add_stderr=$(mktemp)
+  SNAP2GIT_TMPFILES+=("$add_stderr")
+  local add_failed=false
+
+  if ! snap_git "$name" add -A 2>"$add_stderr"; then
+    add_failed=true
+  fi
+
+  # If add failed, check if it's file-level (locked/unreadable) or structural
+  if $add_failed; then
+    if grep -qi "permission denied\|unable to index\|could not read" "$add_stderr" 2>/dev/null; then
+      warn "Some files could not be staged, retrying in 2s..."
+      sleep 2
+      local retry_stderr
+      retry_stderr=$(mktemp)
+      SNAP2GIT_TMPFILES+=("$retry_stderr")
+      if ! snap_git "$name" add -A 2>"$retry_stderr"; then
+        if grep -qi "permission denied\|unable to index\|could not read" "$retry_stderr" 2>/dev/null; then
+          warn "Some files still locked/unreadable after retry:"
+          cat "$retry_stderr" >&2
+          # Continue with whatever was staged
+        else
+          # Structural git error on retry
+          cat "$retry_stderr" >&2
+          die "git add failed for '$name'"
+        fi
+      fi
+    else
+      # Structural git error (not a file-level issue)
+      cat "$add_stderr" >&2
+      die "git add failed for '$name'"
+    fi
+  fi
+
+  # Check if anything was actually staged
+  if snap_git "$name" diff --cached --quiet 2>/dev/null; then
+    warn "No files could be staged for '$name' (all may be locked)."
+    return 1
+  fi
+
+  info "Staged changes in '$name'."
 
   if $stage_only; then
     info "Changes staged but not committed (--stage-only)."
@@ -285,6 +355,13 @@ cmd_snapshot() {
   fi
 
   snap_git "$name" commit -m "$message" --quiet
+
+  # If there were locked files, report partial success
+  if $add_failed; then
+    warn "Snapshot committed with some files skipped (locked/unreadable): $message"
+    return 1
+  fi
+
   info "Snapshot committed: $message"
 }
 
@@ -292,9 +369,7 @@ cmd_status() {
   local name="${1:-}"
   [[ -z "$name" ]] && die "usage: snap2git status <name>"
 
-  local gitdir
-  gitdir="$(repo_gitdir "$name")"
-  [[ ! -d "$gitdir" ]] && die "repo '$name' not initialized"
+  require_repo "$name"
 
   local changes
   changes="$(snap_git "$name" status --porcelain)"
@@ -312,9 +387,7 @@ cmd_log() {
   local name="${1:-}" count="${2:-20}"
   [[ -z "$name" ]] && die "usage: snap2git log <name> [count]"
 
-  local gitdir
-  gitdir="$(repo_gitdir "$name")"
-  [[ ! -d "$gitdir" ]] && die "repo '$name' not initialized"
+  require_repo "$name"
 
   snap_git "$name" log \
     --oneline \
@@ -327,10 +400,10 @@ cmd_verify() {
   local name="${1:-}"
   [[ -z "$name" ]] && die "usage: snap2git verify <name>"
 
+  require_repo "$name"
+
   local gitdir
   gitdir="$(repo_gitdir "$name")"
-  [[ ! -d "$gitdir" ]] && die "repo '$name' not initialized"
-
   info "Verifying integrity of '$name' ($(du -sh "$gitdir" | cut -f1))..."
   if snap_git "$name" fsck --no-progress 2>&1; then
     info "Integrity check passed."
