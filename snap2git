@@ -230,6 +230,12 @@ require_repo() {
   if [[ ! -d "$worktree" ]]; then
     die "worktree for '$name' not found: $worktree (has the folder moved?)"
   fi
+
+  # Backfill git identity for repos created before v0.2
+  if ! git --git-dir="$gitdir" config user.name >/dev/null 2>&1; then
+    git --git-dir="$gitdir" config user.name "snap2git"
+    git --git-dir="$gitdir" config user.email "snap2git@localhost"
+  fi
 }
 
 # --- Default exclude rules -------------------------------------------------
