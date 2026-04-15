@@ -385,6 +385,35 @@ cmd_exclude() {
 
 # --- Commands --------------------------------------------------------------
 
+# Run a command function for each configured repo.
+# Continues on failure, prints summary at end.
+run_for_all() {
+  local cmd_func="$1"; shift
+  local repos failures=0 total=0
+
+  repos="$(config_list_repos)"
+  if [[ -z "$repos" ]]; then
+    die "no repos configured (run 'snap2git init' first)"
+  fi
+
+  while IFS= read -r name; do
+    total=$((total + 1))
+    info "--- $name ---"
+    # Run in subshell so die() doesn't kill the whole script
+    if ! ( "$cmd_func" "$name" "$@" ); then
+      warn "failed: $name"
+      failures=$((failures + 1))
+    fi
+    echo
+  done <<< "$repos"
+
+  if [[ "$failures" -gt 0 ]]; then
+    warn "$failures of $total repo(s) had errors."
+    return 1
+  fi
+  info "All $total repo(s) completed successfully."
+}
+
 cmd_init() {
   local name="${1:-}" worktree_arg="${2:-}"
   [[ -z "$name" ]] && die "usage: snap2git init <name> <worktree-path>"
@@ -430,10 +459,11 @@ cmd_init() {
 
 cmd_snapshot() {
   local dry_run=false stage_only=false message=""
-  local name=""
+  local name="" run_all=false
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --all|-a)     run_all=true; shift ;;
       --dry-run|-n) dry_run=true; shift ;;
       --stage-only|-s) stage_only=true; shift ;;
       --message|-m) message="$2"; shift 2 ;;
@@ -442,7 +472,17 @@ cmd_snapshot() {
     esac
   done
 
-  [[ -z "$name" ]] && die "usage: snap2git snapshot <name> [--dry-run] [--stage-only] [--message MSG]"
+  if $run_all || [[ -z "$name" ]]; then
+    run_for_all _snapshot_one "$dry_run" "$stage_only" "$message"
+    return $?
+  fi
+
+  _snapshot_one "$name" "$dry_run" "$stage_only" "$message"
+}
+
+# Internal: snapshot one repo. Args: name dry_run stage_only message
+_snapshot_one() {
+  local name="$1" dry_run="$2" stage_only="$3" message="$4"
 
   require_repo "$name"
   local gitdir worktree
@@ -552,9 +592,24 @@ cmd_snapshot() {
 }
 
 cmd_status() {
-  local name="${1:-}"
-  [[ -z "$name" ]] && die "usage: snap2git status <name>"
+  local name="" run_all=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --all|-a) run_all=true; shift ;;
+      -*) die "unknown option: $1" ;;
+      *) name="$1"; shift ;;
+    esac
+  done
 
+  if $run_all || [[ -z "$name" ]]; then
+    run_for_all _status_one
+    return $?
+  fi
+  _status_one "$name"
+}
+
+_status_one() {
+  local name="$1"
   require_repo "$name"
 
   local changes
@@ -583,9 +638,24 @@ cmd_log() {
 }
 
 cmd_verify() {
-  local name="${1:-}"
-  [[ -z "$name" ]] && die "usage: snap2git verify <name>"
+  local name="" run_all=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --all|-a) run_all=true; shift ;;
+      -*) die "unknown option: $1" ;;
+      *) name="$1"; shift ;;
+    esac
+  done
 
+  if $run_all || [[ -z "$name" ]]; then
+    run_for_all _verify_one
+    return $?
+  fi
+  _verify_one "$name"
+}
+
+_verify_one() {
+  local name="$1"
   require_repo "$name"
 
   local gitdir
@@ -646,9 +716,15 @@ Global options:
   --force                Skip config validation
 
 Snapshot options:
+  --all, -a              Operate on all repos
   --dry-run, -n          Show what would happen without doing it
   --stage-only, -s       Stage changes but don't commit
   --message, -m MSG      Use a custom commit message
+
+Status/verify options:
+  --all, -a              Operate on all repos
+
+Note: When name is omitted, snapshot/status/verify operate on all repos.
 
 Config file:
   Location: ~/.config/snap2git/config (or $SNAP2GIT_CONFIG)
