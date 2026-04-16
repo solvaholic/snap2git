@@ -1,0 +1,30 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify version tag matches script
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          script_ver="$(grep -m1 '^SNAP2GIT_VERSION=' snap2git | cut -d'"' -f2)"
+          if [ "$tag" != "$script_ver" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match SNAP2GIT_VERSION=$script_ver in snap2git"
+            exit 1
+          fi
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: snap2git

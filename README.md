@@ -3,29 +3,46 @@
 Git-powered snapshots for file collections. Use your cloud drive folder as-is -
 no `.git` folder in it, no copying, no syncing. Just invisible version control.
 
+## Install
+
+```bash
+# Download the latest release
+curl -fsSL https://github.com/solvaholic/snap2git/releases/latest/download/snap2git \
+  -o /usr/local/bin/snap2git && chmod +x /usr/local/bin/snap2git
+```
+
+Or clone the repo and run it directly:
+
+```bash
+git clone https://github.com/solvaholic/snap2git.git
+cd snap2git
+chmod +x snap2git
+./snap2git --version
+```
+
+**Requirements:** Bash (4.0+) and Git. Both are pre-installed on macOS and most
+Linux distributions.
+
 ## Quick Start
 
 ```bash
-# Make it executable
-chmod +x snap2git
-
 # Initialize a snapshot repo for your notes folder
-./snap2git init my-notes ~/CloudDrive/Notes
+snap2git init my-notes ~/CloudDrive/Notes
 
 # Take a snapshot
-./snap2git snapshot my-notes
+snap2git snapshot my-notes
 
 # Snapshot all repos at once
-./snap2git snapshot
+snap2git snapshot
 
 # See what changed since the last snapshot
-./snap2git status my-notes
+snap2git status my-notes
 
 # View snapshot history
-./snap2git log my-notes
+snap2git log my-notes
 
 # Verify repo integrity
-./snap2git verify my-notes
+snap2git verify my-notes
 ```
 
 ## How It Works
