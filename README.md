@@ -181,6 +181,7 @@ snap2git exclude my-library --preset
 | Preset | Excludes |
 |--------|----------|
 | `calibre` | Calibre app state: `.cache/`, `.config/`, `.calnotes/`, `full-text-search.db` |
+| `obsidian` | Obsidian vault metadata: `.obsidian/` |
 
 ## Configuration
 

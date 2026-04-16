@@ -92,6 +92,14 @@ writes to your cloud folder, even for restores. The original plan had a
 
 ## v0.5 - Usability
 
+### Smart init
+- `snap2git init` could detect files that a preset would exclude (e.g.
+  `.obsidian/`, `.cache/`, `full-text-search.db`) and suggest applying the
+  relevant preset
+- Design questions to resolve: auto-apply and tell user how to undo? Stop
+  and ask? Offer `--exclude-presets TYPE` and `--no-excludes` flags?
+- For now, users discover presets via `snap2git exclude <name> --preset`
+
 ### Shell completion
 - bash completion for commands, repo names, and flags
 - zsh completion

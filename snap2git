@@ -311,11 +311,21 @@ metadata_db_prefs_backup.json
 PRESET
 }
 
+preset_obsidian() {
+  cat << 'PRESET'
+
+# -- preset: obsidian --
+# Obsidian vault metadata (not your notes)
+.obsidian/
+PRESET
+}
+
 # Add new presets as functions: preset_<name>()
 
 preset_list() {
   echo "Available presets:"
-  echo "  calibre  - Excludes Calibre app state (.cache, .config, .calnotes, etc.)"
+  echo "  calibre   - Excludes Calibre app state (.cache, .config, .calnotes, etc.)"
+  echo "  obsidian  - Excludes Obsidian vault metadata (.obsidian/)"
 }
 
 # --- Exclude subcommand ----------------------------------------------------

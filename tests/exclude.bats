@@ -100,6 +100,19 @@ load test_helper
   run bash "$SNAP2GIT" exclude myrepo --preset
   [ "$status" -eq 0 ]
   [[ "$output" == *"calibre"* ]]
+  [[ "$output" == *"obsidian"* ]]
+}
+
+@test "exclude: apply obsidian preset" {
+  init_test_repo myrepo
+
+  run bash "$SNAP2GIT" exclude myrepo --preset obsidian
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Applied preset"* ]]
+
+  run bash "$SNAP2GIT" exclude myrepo --list
+  [[ "$output" == *"preset: obsidian"* ]]
+  [[ "$output" == *".obsidian/"* ]]
 }
 
 # --- Edit (just test that it requires EDITOR) ---
