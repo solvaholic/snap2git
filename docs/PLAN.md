@@ -60,34 +60,35 @@ writes to your cloud folder, even for restores. The original plan had a
 `restore` command; it was dropped to keep this guarantee.
 
 
-## v0.4 - Automation and maintenance
-
-### fswatch integration
-- `snap2git watch <name>` - start watching with fswatch
-- Debounce with configurable latency (default 30s)
-- Coalesce rapid changes into single snapshots
-- Log to file, daemonize option
-
-### Scheduled snapshots
-- Generate launchd plist for macOS (`snap2git schedule <name> <interval>`)
-- Cron fallback for Linux
+## v0.4 - Automation and maintenance (shipped)
 
 ### Garbage collection
 - `snap2git gc <name>` - run git gc with aggressive options
-- Configurable auto-gc (e.g. every N snapshots or every N days)
 - `snap2git gc --all` for all repos
-- Set binary-aware `.gitattributes` in the bare repo during gc (or at
-  init time) to mark known compressed formats (epub, pdf, zip, cbz, jpg,
-  png, mp3, mp4) with `-delta` - skips futile delta compression and saves
-  significant CPU on binary-heavy repos
+- Auto-gc after every 50 snapshots by default (configurable per-repo
+  via `auto_gc_interval`, set to 0 to disable)
+- Binary-aware `info/attributes` in the bare repo marks known compressed
+  formats (epub, pdf, zip, cbz, jpg, png, mp3, mp4, etc.) with `-delta` -
+  skips futile delta compression
+- Attributes written at init time for new repos and during gc for existing
 
 ### Repo statistics
 - `snap2git info <name>` - show repo size, snapshot count, date range,
-  largest files, file count over time
-- Break down size and file count by extension so users can see what's
-  eating space (e.g. "48.5 GB across 2,066 .epub files")
+  largest files, file count
+- Break down size and file count by extension
 - Flag potential excludes: files that look like app state or temp data
-  rather than user content
+
+### Scheduled snapshots
+- `snap2git schedule <name> <minutes>` - schedule periodic snapshots
+- macOS: generates and loads a launchd plist
+- Linux: installs a cron entry
+- `snap2git schedule <name> --status` to check if active
+- `snap2git schedule <name> --remove` to uninstall
+
+### Deferred
+- fswatch integration (`watch` command) was deferred to preserve the
+  "no external dependencies beyond Git and Bash" principle. May revisit
+  in a future version as an optional feature.
 
 
 ## v0.5 - Usability
