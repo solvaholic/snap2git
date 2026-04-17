@@ -93,6 +93,21 @@ files are edited on different platforms.
 | `exclude <name> --edit` | Open excludes in `$EDITOR` |
 | `exclude <name> --reset` | Reset excludes to defaults |
 | `exclude <name> --preset <type>` | Apply a curated exclude preset |
+| `gc <name>` | Run garbage collection |
+| `gc --all` | GC all repos |
+| `info <name>` | Show repo statistics |
+| `schedule <name> <min>` | Schedule periodic snapshots |
+| `tag <name> <label>` | Tag the latest snapshot |
+| `tag <name> --list` | List tags |
+| `tag <name> --delete <label>` | Delete a tag |
+| `search <name> <pattern>` | Find snapshots by content changes |
+| `search <name> --regex <pat>` | Search with regex |
+| `search <name> --file <glob>` | Restrict search to files matching glob |
+| `group <name> add <repo>` | Add repos to a group |
+| `group <name> remove <repo>` | Remove a repo from a group |
+| `group --list` | List all groups |
+| `completion bash` | Print bash completion script |
+| `completion zsh` | Print zsh completion script |
 
 ## Multi-repo Operations
 
@@ -108,6 +123,26 @@ snap2git verify --all      # verify all repos
 
 If one repo fails (missing worktree, etc.), the others still run. A summary
 at the end reports any failures.
+
+### Repo Groups
+
+Group repos together and operate on them as a unit:
+
+```bash
+# Create a group
+snap2git group cloud add my-notes my-library
+
+# Snapshot the group
+snap2git snapshot cloud
+
+# Status for the group
+snap2git status cloud
+
+# List groups
+snap2git group --list
+```
+
+Groups work anywhere `--all` works: `snapshot`, `status`, `verify`, `gc`.
 
 ## Snapshot Options
 
@@ -185,6 +220,20 @@ Presets are curated sets of exclude patterns for specific collection types.
 They're additive - they append to your existing excludes with a comment
 header so you can find and remove them later.
 
+During `init`, snap2git auto-detects files that match a preset and applies it
+automatically. For example, if your worktree contains `metadata.db`, the
+`calibre` preset is applied. You'll see a message like:
+
+```
+Applied exclude preset 'calibre' (detected matching files).
+  Undo: snap2git exclude my-library --edit
+```
+
+To skip auto-detection: `snap2git init --no-excludes my-library ~/path`
+
+To explicitly apply a preset at init:
+`snap2git init --exclude-preset calibre my-library ~/path`
+
 ```bash
 # Apply the calibre preset
 snap2git exclude my-library --preset calibre
@@ -200,6 +249,46 @@ snap2git exclude my-library --preset
 | `calibre` | Calibre app state: `.cache/`, `.config/`, `.calnotes/`, `full-text-search.db` |
 | `obsidian` | Obsidian vault metadata: `.obsidian/` |
 
+## Tagging Snapshots
+
+Tag snapshots with meaningful labels for easy reference:
+
+```bash
+snap2git tag my-notes before-reorg
+snap2git tag my-notes --list
+snap2git tag my-notes --delete before-reorg
+```
+
+Tags are lightweight Git tags on the latest commit. Use them with `diff`:
+`snap2git diff my-notes before-reorg HEAD`
+
+## Searching Snapshots
+
+Find snapshots where specific content was added or removed:
+
+```bash
+# String search (git log -S)
+snap2git search my-notes "TODO"
+
+# Regex search (git log -G)
+snap2git search my-notes --regex "fix(ed|ing)"
+
+# Restrict to specific files
+snap2git search my-notes --file "*.md" "draft"
+```
+
+## Shell Completion
+
+Enable tab completion for commands, repo names, and flags:
+
+```bash
+# Bash - add to ~/.bashrc
+eval "$(snap2git completion bash)"
+
+# Zsh - add to ~/.zshrc
+eval "$(snap2git completion zsh)"
+```
+
 ## Configuration
 
 Config lives at `~/.config/snap2git/config` (INI-style). Lines starting with
@@ -210,6 +299,9 @@ Config lives at `~/.config/snap2git/config` (INI-style). Lines starting with
 worktree = ~/CloudDrive/Notes
 branch = main
 commit_template = Snapshot: %Y-%m-%d %H:%M:%S
+
+[group:cloud]
+repos = my-notes,my-library
 ```
 
 View or update config from the command line:

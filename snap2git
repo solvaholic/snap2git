@@ -7,7 +7,7 @@
 #
 set -euo pipefail
 
-SNAP2GIT_VERSION="0.4.0"
+SNAP2GIT_VERSION="0.5.0"
 SNAP2GIT_HOME="${SNAP2GIT_HOME:-$HOME/.snap2git}"
 SNAP2GIT_CONFIG="${SNAP2GIT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/snap2git/config}"
 LARGE_FILE_WARN_BYTES=$((50 * 1024 * 1024))  # 50 MB
@@ -129,6 +129,116 @@ config_list_repos() {
   grep '^\[repo:' "$SNAP2GIT_CONFIG" | sed 's/\[repo:\(.*\)\]/\1/'
 }
 
+# List all configured group names.
+config_list_groups() {
+  if [[ ! -f "$SNAP2GIT_CONFIG" ]]; then
+    return
+  fi
+  grep '^\[group:' "$SNAP2GIT_CONFIG" | sed 's/\[group:\(.*\)\]/\1/'
+}
+
+# Get the repos in a group (comma-separated in config, returned one per line).
+config_get_group_repos() {
+  local group="$1"
+  if [[ ! -f "$SNAP2GIT_CONFIG" ]]; then
+    return
+  fi
+  local raw
+  raw=$(awk -v section="group:$group" -v key="repos" '
+    BEGIN { in_section = 0 }
+    /^[#;]/ { next }
+    /^[[:space:]]*$/ { next }
+    /^\[/ {
+      gsub(/[][]/, "", $0)
+      in_section = ($0 == section) ? 1 : 0
+      next
+    }
+    in_section && $0 ~ "^" key " *= *" {
+      sub(/^[^=]*= */, "")
+      print
+      exit
+    }
+  ' "$SNAP2GIT_CONFIG")
+  # Split comma-separated list, trim whitespace
+  echo "$raw" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$' || true
+}
+
+# Set the repos list for a group in config.
+config_set_group() {
+  local group="$1" repos_csv="$2"
+  local config_dir
+  config_dir="$(dirname "$SNAP2GIT_CONFIG")"
+  mkdir -p "$config_dir"
+
+  if [[ ! -f "$SNAP2GIT_CONFIG" ]]; then
+    printf '[group:%s]\nrepos = %s\n' "$group" "$repos_csv" > "$SNAP2GIT_CONFIG"
+    return
+  fi
+
+  if grep -q "^\[group:${group}\]" "$SNAP2GIT_CONFIG"; then
+    local tmp
+    tmp=$(mktemp)
+    SNAP2GIT_TMPFILES+=("$tmp")
+    awk -v section="group:$group" -v key="repos" -v val="$repos_csv" '
+      BEGIN { in_section = 0; found = 0 }
+      /^\[/ {
+        if (in_section && !found) {
+          printf "%s = %s\n", key, val
+          found = 1
+        }
+        header = $0
+        gsub(/[][]/, "", header)
+        in_section = (header == section) ? 1 : 0
+        print; next
+      }
+      in_section && $0 ~ "^" key " *= *" {
+        printf "%s = %s\n", key, val
+        found = 1; next
+      }
+      { print }
+      END { if (in_section && !found) printf "%s = %s\n", key, val }
+    ' "$SNAP2GIT_CONFIG" > "$tmp"
+    mv "$tmp" "$SNAP2GIT_CONFIG"
+  else
+    printf '\n[group:%s]\nrepos = %s\n' "$group" "$repos_csv" >> "$SNAP2GIT_CONFIG"
+  fi
+}
+
+# Remove a group section from config.
+config_remove_group() {
+  local group="$1"
+  if [[ ! -f "$SNAP2GIT_CONFIG" ]]; then
+    return
+  fi
+  local tmp
+  tmp=$(mktemp)
+  SNAP2GIT_TMPFILES+=("$tmp")
+  awk -v section="group:$group" '
+    BEGIN { in_section = 0 }
+    /^\[/ {
+      header = $0
+      gsub(/[][]/, "", header)
+      in_section = (header == section) ? 1 : 0
+      if (!in_section) print
+      next
+    }
+    !in_section { print }
+  ' "$SNAP2GIT_CONFIG" > "$tmp"
+  mv "$tmp" "$SNAP2GIT_CONFIG"
+}
+
+# Check if a name is a group.
+is_group() {
+  local name="$1"
+  local groups
+  groups="$(config_list_groups)"
+  if [[ -n "$groups" ]]; then
+    echo "$groups" | grep -qx "$name"
+    return $?
+  fi
+  return 1
+}
+
 # Validate config file structure. Returns errors on stderr.
 # With --force, warnings are printed but execution continues.
 config_validate() {
@@ -150,8 +260,8 @@ config_validate() {
     # Section header
     if [[ "$line" =~ ^\[.*\]$ ]]; then
       current_section="${line//[\[\]]/}"
-      if [[ ! "$current_section" =~ ^repo: ]]; then
-        warn "config line $line_num: unknown section type '[$current_section]' (expected [repo:NAME])"
+      if [[ ! "$current_section" =~ ^(repo|group): ]]; then
+        warn "config line $line_num: unknown section type '[$current_section]' (expected [repo:NAME] or [group:NAME])"
         errors=$((errors + 1))
       fi
       continue
@@ -321,6 +431,32 @@ PRESET
 }
 
 # Add new presets as functions: preset_<name>()
+
+# Map preset names to detection signatures (files/dirs in worktree root).
+preset_detect_signatures() {
+  # Format: preset_name:signature (checked with -e at worktree root)
+  echo "calibre:metadata.db"
+  echo "calibre:.caltrash"
+  echo "obsidian:.obsidian"
+}
+
+# Detect which presets match a worktree (root-only scan).
+# Prints matching preset names, one per line, deduplicated.
+detect_presets() {
+  local worktree="$1"
+  local seen="" line preset sig
+  while IFS= read -r line; do
+    preset="${line%%:*}"
+    sig="${line#*:}"
+    if [[ -e "$worktree/$sig" ]]; then
+      # Deduplicate: only print each preset once
+      if [[ ":$seen:" != *":$preset:"* ]]; then
+        echo "$preset"
+        seen="$seen:$preset"
+      fi
+    fi
+  done < <(preset_detect_signatures)
+}
 
 preset_list() {
   echo "Available presets:"
@@ -509,8 +645,59 @@ run_for_all() {
   info "All $total repo(s) completed successfully."
 }
 
+# Run a command function for each repo in a group.
+run_for_group() {
+  local group="$1" cmd_func="$2"; shift 2
+  local repos failures=0 total=0
+
+  repos="$(config_get_group_repos "$group")"
+  if [[ -z "$repos" ]]; then
+    die "group '$group' has no repos"
+  fi
+
+  while IFS= read -r name; do
+    total=$((total + 1))
+    info "--- $name ---"
+    if ! ( "$cmd_func" "$name" "$@" ); then
+      warn "failed: $name"
+      failures=$((failures + 1))
+    fi
+    echo
+  done <<< "$repos"
+
+  if [[ "$failures" -gt 0 ]]; then
+    warn "$failures of $total repo(s) in group '$group' had errors."
+    return 1
+  fi
+  info "All $total repo(s) in group '$group' completed successfully."
+}
+
 cmd_init() {
-  local name="${1:-}" worktree_arg="${2:-}"
+  local name="" worktree_arg=""
+  local no_excludes=false
+  local explicit_presets=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --no-excludes) no_excludes=true; shift ;;
+      --exclude-preset)
+        [[ -z "${2:-}" ]] && die "--exclude-preset requires a preset name"
+        explicit_presets+=("$2"); shift 2 ;;
+      --help|-h) cmd_help; return 0 ;;
+      -*)  die "unknown option: $1" ;;
+      *)
+        if [[ -z "$name" ]]; then
+          name="$1"
+        elif [[ -z "$worktree_arg" ]]; then
+          worktree_arg="$1"
+        else
+          die "unexpected argument: $1"
+        fi
+        shift
+        ;;
+    esac
+  done
+
   [[ -z "$name" ]] && die "usage: snap2git init <name> <worktree-path>"
   [[ -z "$worktree_arg" ]] && die "usage: snap2git init <name> <worktree-path>"
 
@@ -547,6 +734,43 @@ cmd_init() {
   # Write binary attributes for efficient gc
   write_binary_attributes "$gitdir"
 
+  # Apply exclude presets
+  local exclude_file
+  exclude_file="$(exclude_file_for "$name")"
+
+  if ! $no_excludes; then
+    # Apply explicitly requested presets
+    local p preset_func
+    for p in "${explicit_presets[@]+"${explicit_presets[@]}"}"; do
+      preset_func="preset_${p}"
+      if ! declare -f "$preset_func" >/dev/null 2>&1; then
+        die "unknown preset: '$p'"
+      fi
+      "$preset_func" >> "$exclude_file"
+      info "Applied exclude preset '$p' (requested via --exclude-preset)."
+    done
+
+    # Auto-detect presets from worktree contents (skip already-applied)
+    local applied_str=""
+    for p in "${explicit_presets[@]+"${explicit_presets[@]}"}"; do
+      applied_str="$applied_str:$p"
+    done
+
+    local detected
+    detected="$(detect_presets "$worktree")"
+    if [[ -n "$detected" ]]; then
+      while IFS= read -r p; do
+        if [[ ":$applied_str:" == *":$p:"* ]]; then
+          continue  # Already applied explicitly
+        fi
+        preset_func="preset_${p}"
+        "$preset_func" >> "$exclude_file"
+        info "Applied exclude preset '$p' (detected matching files)."
+        info "  Undo: snap2git exclude $name --edit"
+      done <<< "$detected"
+    fi
+  fi
+
   # Save to config
   config_set "$name" "worktree" "$worktree"
   config_set "$name" "branch" "main"
@@ -577,6 +801,11 @@ cmd_snapshot() {
 
   if $run_all || [[ -z "$name" ]]; then
     run_for_all _snapshot_one "$dry_run" "$stage_only" "$message"
+    return $?
+  fi
+
+  if is_group "$name"; then
+    run_for_group "$name" _snapshot_one "$dry_run" "$stage_only" "$message"
     return $?
   fi
 
@@ -712,6 +941,10 @@ cmd_status() {
     run_for_all _status_one
     return $?
   fi
+  if is_group "$name"; then
+    run_for_group "$name" _status_one
+    return $?
+  fi
   _status_one "$name"
 }
 
@@ -757,6 +990,10 @@ cmd_verify() {
 
   if $run_all || [[ -z "$name" ]]; then
     run_for_all _verify_one
+    return $?
+  fi
+  if is_group "$name"; then
+    run_for_group "$name" _verify_one
     return $?
   fi
   _verify_one "$name"
@@ -947,6 +1184,11 @@ cmd_gc() {
 
   if $run_all || [[ -z "$name" ]]; then
     run_for_all _gc_one
+    return $?
+  fi
+
+  if is_group "$name"; then
+    run_for_group "$name" _gc_one
     return $?
   fi
 
@@ -1327,6 +1569,485 @@ cmd_list() {
   done
 }
 
+cmd_tag() {
+  local name="" label="" action="tag"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --list|-l) action="list"; shift ;;
+      --delete|-d)
+        action="delete"
+        [[ -n "${2:-}" && "${2:0:1}" != "-" ]] && { label="$2"; shift; }
+        shift ;;
+      --help|-h) cmd_help; return 0 ;;
+      -*) die "unknown option: $1" ;;
+      *)
+        if [[ -z "$name" ]]; then
+          name="$1"
+        elif [[ -z "$label" ]]; then
+          label="$1"
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  [[ -z "$name" ]] && die "usage: snap2git tag <name> <label> [--list|--delete <label>]"
+  require_repo "$name"
+
+  case "$action" in
+    list)
+      snap_git "$name" tag -l
+      ;;
+    delete)
+      [[ -z "$label" ]] && die "usage: snap2git tag <name> --delete <label>"
+      snap_git "$name" tag -d "$label"
+      info "Deleted tag '$label' from '$name'."
+      ;;
+    tag)
+      [[ -z "$label" ]] && die "usage: snap2git tag <name> <label>"
+      snap_git "$name" tag "$label"
+      info "Tagged latest snapshot of '$name' as '$label'."
+      ;;
+  esac
+}
+
+cmd_search() {
+  local name="" pattern="" mode="string" file_glob=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --regex|-r) mode="regex"; shift ;;
+      --file|-f)
+        [[ -z "${2:-}" ]] && die "--file requires a glob pattern"
+        file_glob="$2"; shift 2 ;;
+      --help|-h) cmd_help; return 0 ;;
+      -*) die "unknown option: $1" ;;
+      *)
+        if [[ -z "$name" ]]; then
+          name="$1"
+        elif [[ -z "$pattern" ]]; then
+          pattern="$1"
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  [[ -z "$name" ]] && die "usage: snap2git search <name> <pattern> [--regex] [--file <glob>]"
+  [[ -z "$pattern" ]] && die "usage: snap2git search <name> <pattern> [--regex] [--file <glob>]"
+  require_repo "$name"
+
+  local search_flag="-S"
+  if [[ "$mode" == "regex" ]]; then
+    search_flag="-G"
+  fi
+
+  local -a log_args=(
+    log
+    "$search_flag" "$pattern"
+    --format="%C(dim)%h%C(reset) %C(green)%cd%C(reset) %s"
+    --date=format:"%Y-%m-%d %H:%M:%S"
+  )
+
+  if [[ -n "$file_glob" ]]; then
+    log_args+=("--" "$file_glob")
+  fi
+
+  snap_git "$name" "${log_args[@]}"
+}
+
+cmd_group() {
+  local group_name="" action=""
+  local repos_to_add=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --list|-l) action="list"; shift ;;
+      add)
+        action="add"
+        shift
+        while [[ $# -gt 0 && "${1:0:1}" != "-" ]]; do
+          repos_to_add+=("$1"); shift
+        done
+        ;;
+      remove)
+        action="remove"
+        shift
+        while [[ $# -gt 0 && "${1:0:1}" != "-" ]]; do
+          repos_to_add+=("$1"); shift
+        done
+        ;;
+      --help|-h) cmd_help; return 0 ;;
+      -*) die "unknown option: $1" ;;
+      *)
+        if [[ -z "$group_name" ]]; then
+          group_name="$1"
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  # List all groups
+  if [[ "$action" == "list" || -z "$group_name" ]]; then
+    local groups
+    groups="$(config_list_groups)"
+    if [[ -z "$groups" ]]; then
+      info "No groups configured."
+      return 0
+    fi
+    while IFS= read -r g; do
+      local repos_csv
+      repos_csv="$(config_get_group_repos "$g" | tr '\n' ',' | sed 's/,$//')"
+      info "  $g: $repos_csv"
+    done <<< "$groups"
+    return 0
+  fi
+
+  # Validate group name doesn't collide with a repo name
+  local repos_list
+  repos_list="$(config_list_repos)"
+  if [[ -n "$repos_list" ]] && echo "$repos_list" | grep -qx "$group_name"; then
+    die "group name '$group_name' conflicts with an existing repo name"
+  fi
+
+  case "$action" in
+    add)
+      [[ ${#repos_to_add[@]} -eq 0 ]] && die "usage: snap2git group <name> add <repo> [repo...]"
+      # Validate that each repo exists
+      local r
+      for r in "${repos_to_add[@]}"; do
+        if ! config_get "$r" "worktree" "" | grep -q .; then
+          die "repo '$r' does not exist"
+        fi
+      done
+      # Get current repos, merge, deduplicate
+      local current new_csv
+      current="$(config_get_group_repos "$group_name")"
+      local all_repos="$current"
+      for r in "${repos_to_add[@]}"; do
+        all_repos="$(printf '%s\n%s' "$all_repos" "$r")"
+      done
+      new_csv="$(echo "$all_repos" | grep -v '^$' | sort -u | tr '\n' ',' | sed 's/,$//')"
+      config_set_group "$group_name" "$new_csv"
+      info "Group '$group_name': $new_csv"
+      ;;
+    remove)
+      [[ ${#repos_to_add[@]} -eq 0 ]] && die "usage: snap2git group <name> remove <repo>"
+      local current_repos
+      current_repos="$(config_get_group_repos "$group_name")"
+      if [[ -z "$current_repos" ]]; then
+        die "group '$group_name' does not exist"
+      fi
+      local r remaining=""
+      for r in "${repos_to_add[@]}"; do
+        if ! echo "$current_repos" | grep -qx "$r"; then
+          die "repo '$r' is not in group '$group_name'"
+        fi
+      done
+      # Filter out removed repos
+      while IFS= read -r r; do
+        local remove=false rr
+        for rr in "${repos_to_add[@]}"; do
+          if [[ "$r" == "$rr" ]]; then
+            remove=true
+            break
+          fi
+        done
+        if ! $remove; then
+          remaining="$(printf '%s\n%s' "$remaining" "$r")"
+        fi
+      done <<< "$current_repos"
+      local new_csv
+      new_csv="$(echo "$remaining" | grep -v '^$' | tr '\n' ',' | sed 's/,$//' || true)"
+      if [[ -z "$new_csv" ]]; then
+        config_remove_group "$group_name"
+        info "Removed group '$group_name' (no repos remaining)."
+      else
+        config_set_group "$group_name" "$new_csv"
+        info "Group '$group_name': $new_csv"
+      fi
+      ;;
+    *)
+      # Show group contents
+      local repos_csv
+      repos_csv="$(config_get_group_repos "$group_name" | tr '\n' ',' | sed 's/,$//')"
+      if [[ -z "$repos_csv" ]]; then
+        die "group '$group_name' does not exist"
+      fi
+      info "$group_name: $repos_csv"
+      ;;
+  esac
+}
+
+cmd_completion() {
+  local shell="${1:-}"
+  case "$shell" in
+    bash) _completion_bash ;;
+    zsh)  _completion_zsh ;;
+    *)    die "usage: snap2git completion <bash|zsh>" ;;
+  esac
+}
+
+_completion_bash() {
+  cat << 'BASH_COMPLETION'
+# snap2git bash completion
+# Add to .bashrc: eval "$(snap2git completion bash)"
+
+_snap2git() {
+  local cur prev words cword
+  _init_completion || return
+
+  local commands="init snapshot status log diff verify checkout list config exclude gc info schedule tag search group completion help version"
+
+  # Get repo and group names from config
+  local config="${SNAP2GIT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/snap2git/config}"
+  local repo_names=""
+  local group_names=""
+  if [[ -f "$config" ]]; then
+    repo_names="$(grep '^\[repo:' "$config" 2>/dev/null | sed 's/\[repo:\(.*\)\]/\1/' || true)"
+    group_names="$(grep '^\[group:' "$config" 2>/dev/null | sed 's/\[group:\(.*\)\]/\1/' || true)"
+  fi
+  local all_names="$repo_names $group_names"
+
+  # Complete command names at position 1
+  if [[ $cword -eq 1 ]]; then
+    COMPREPLY=( $(compgen -W "$commands $repo_names" -- "$cur") )
+    return
+  fi
+
+  local cmd="${words[1]}"
+
+  case "$cmd" in
+    init)
+      if [[ "$cur" == -* ]]; then
+        COMPREPLY=( $(compgen -W "--no-excludes --exclude-preset --help" -- "$cur") )
+      elif [[ "$prev" == "--exclude-preset" ]]; then
+        COMPREPLY=( $(compgen -W "calibre obsidian" -- "$cur") )
+      elif [[ $cword -eq 3 ]]; then
+        # Worktree path - complete directories
+        COMPREPLY=( $(compgen -d -- "$cur") )
+      fi
+      ;;
+    snapshot)
+      if [[ "$cur" == -* ]]; then
+        COMPREPLY=( $(compgen -W "--all --dry-run --stage-only --message --help" -- "$cur") )
+      else
+        COMPREPLY=( $(compgen -W "$all_names" -- "$cur") )
+      fi
+      ;;
+    status|verify)
+      if [[ "$cur" == -* ]]; then
+        COMPREPLY=( $(compgen -W "--all --help" -- "$cur") )
+      else
+        COMPREPLY=( $(compgen -W "$all_names" -- "$cur") )
+      fi
+      ;;
+    log|info)
+      COMPREPLY=( $(compgen -W "$repo_names" -- "$cur") )
+      ;;
+    diff)
+      if [[ "$cur" == -* ]]; then
+        COMPREPLY=( $(compgen -W "--stat --name-only --help" -- "$cur") )
+      else
+        COMPREPLY=( $(compgen -W "$repo_names" -- "$cur") )
+      fi
+      ;;
+    checkout)
+      if [[ "$cur" == -* ]]; then
+        COMPREPLY=( $(compgen -W "--list --cleanup --help" -- "$cur") )
+      else
+        COMPREPLY=( $(compgen -W "$repo_names" -- "$cur") )
+      fi
+      ;;
+    config)
+      COMPREPLY=( $(compgen -W "$repo_names" -- "$cur") )
+      ;;
+    exclude)
+      if [[ "$cur" == -* ]]; then
+        COMPREPLY=( $(compgen -W "--list --edit --reset --preset --help" -- "$cur") )
+      elif [[ "$prev" == "--preset" || "$prev" == "-p" ]]; then
+        COMPREPLY=( $(compgen -W "calibre obsidian" -- "$cur") )
+      else
+        COMPREPLY=( $(compgen -W "$repo_names" -- "$cur") )
+      fi
+      ;;
+    gc)
+      if [[ "$cur" == -* ]]; then
+        COMPREPLY=( $(compgen -W "--all --help" -- "$cur") )
+      else
+        COMPREPLY=( $(compgen -W "$all_names" -- "$cur") )
+      fi
+      ;;
+    schedule)
+      if [[ "$cur" == -* ]]; then
+        COMPREPLY=( $(compgen -W "--status --remove --help" -- "$cur") )
+      else
+        COMPREPLY=( $(compgen -W "$repo_names" -- "$cur") )
+      fi
+      ;;
+    tag)
+      if [[ "$cur" == -* ]]; then
+        COMPREPLY=( $(compgen -W "--list --delete --help" -- "$cur") )
+      else
+        COMPREPLY=( $(compgen -W "$repo_names" -- "$cur") )
+      fi
+      ;;
+    search)
+      if [[ "$cur" == -* ]]; then
+        COMPREPLY=( $(compgen -W "--regex --file --help" -- "$cur") )
+      else
+        COMPREPLY=( $(compgen -W "$repo_names" -- "$cur") )
+      fi
+      ;;
+    group)
+      if [[ "$cur" == -* ]]; then
+        COMPREPLY=( $(compgen -W "--list --help" -- "$cur") )
+      elif [[ "$prev" == "add" ]]; then
+        COMPREPLY=( $(compgen -W "$repo_names" -- "$cur") )
+      elif [[ "$prev" == "remove" ]]; then
+        COMPREPLY=( $(compgen -W "$repo_names" -- "$cur") )
+      else
+        COMPREPLY=( $(compgen -W "$group_names add remove" -- "$cur") )
+      fi
+      ;;
+    completion)
+      COMPREPLY=( $(compgen -W "bash zsh" -- "$cur") )
+      ;;
+  esac
+}
+
+complete -F _snap2git snap2git
+BASH_COMPLETION
+}
+
+_completion_zsh() {
+  cat << 'ZSH_COMPLETION'
+# snap2git zsh completion
+# Add to .zshrc: eval "$(snap2git completion zsh)"
+
+_snap2git() {
+  local config="${SNAP2GIT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/snap2git/config}"
+  local repo_names=()
+  local group_names=()
+  if [[ -f "$config" ]]; then
+    repo_names=( ${(f)"$(grep '^\[repo:' "$config" 2>/dev/null | sed 's/\[repo:\(.*\)\]/\1/')"} )
+    group_names=( ${(f)"$(grep '^\[group:' "$config" 2>/dev/null | sed 's/\[group:\(.*\)\]/\1/')"} )
+  fi
+
+  local -a commands=(
+    'init:Initialize a new snapshot repo'
+    'snapshot:Take a snapshot'
+    'status:Show changes since last snapshot'
+    'log:Show snapshot history'
+    'diff:Compare two snapshots'
+    'verify:Check repository integrity'
+    'checkout:Check out a snapshot to a temp dir'
+    'list:List configured repos'
+    'config:Show or set config'
+    'exclude:Manage exclude patterns'
+    'gc:Run garbage collection'
+    'info:Show repo statistics'
+    'schedule:Schedule periodic snapshots'
+    'tag:Tag a snapshot'
+    'search:Find snapshots by content'
+    'group:Manage repo groups'
+    'completion:Generate shell completion'
+    'help:Show help'
+    'version:Show version'
+  )
+
+  _arguments -C \
+    '1:command:->cmd' \
+    '*::arg:->args'
+
+  case "$state" in
+    cmd)
+      _describe 'command' commands
+      compadd "${repo_names[@]}"
+      ;;
+    args)
+      case "${words[1]}" in
+        init)
+          _arguments \
+            '--no-excludes[Skip preset auto-detection]' \
+            '--exclude-preset[Apply a named preset]:preset:(calibre obsidian)' \
+            '1:name:' \
+            '2:worktree:_directories'
+          ;;
+        snapshot)
+          _arguments \
+            '(-a --all)'{-a,--all}'[Operate on all repos]' \
+            '(-n --dry-run)'{-n,--dry-run}'[Show what would happen]' \
+            '(-s --stage-only)'{-s,--stage-only}'[Stage only]' \
+            '(-m --message)'{-m,--message}'[Custom message]:message:' \
+            '1:name:compadd '"${repo_names[*]} ${group_names[*]}"
+          ;;
+        status|verify|gc)
+          _arguments \
+            '(-a --all)'{-a,--all}'[Operate on all repos]' \
+            '1:name:compadd '"${repo_names[*]} ${group_names[*]}"
+          ;;
+        log|info|config)
+          _arguments '1:name:compadd '"${repo_names[*]}"
+          ;;
+        diff)
+          _arguments \
+            '--stat[Show summary]' \
+            '--name-only[Show only file paths]' \
+            '1:name:compadd '"${repo_names[*]}"
+          ;;
+        checkout)
+          _arguments \
+            '(-l --list)'{-l,--list}'[Show active checkouts]' \
+            '--cleanup[Remove temp checkouts]' \
+            '1:name:compadd '"${repo_names[*]}"
+          ;;
+        exclude)
+          _arguments \
+            '(-l --list)'{-l,--list}'[Show excludes]' \
+            '(-e --edit)'{-e,--edit}'[Edit excludes]' \
+            '--reset[Reset to defaults]' \
+            '(-p --preset)'{-p,--preset}'[Apply preset]:preset:(calibre obsidian)' \
+            '1:name:compadd '"${repo_names[*]}"
+          ;;
+        schedule)
+          _arguments \
+            '--status[Show schedule status]' \
+            '--remove[Remove schedule]' \
+            '1:name:compadd '"${repo_names[*]}"
+          ;;
+        tag)
+          _arguments \
+            '(-l --list)'{-l,--list}'[List tags]' \
+            '(-d --delete)'{-d,--delete}'[Delete a tag]' \
+            '1:name:compadd '"${repo_names[*]}"
+          ;;
+        search)
+          _arguments \
+            '(-r --regex)'{-r,--regex}'[Use regex matching]' \
+            '(-f --file)'{-f,--file}'[Restrict to files]:glob:' \
+            '1:name:compadd '"${repo_names[*]}"
+          ;;
+        group)
+          _arguments \
+            '(-l --list)'{-l,--list}'[List groups]' \
+            '1:group:compadd '"${group_names[*]}" \
+            '2:action:(add remove)'
+          ;;
+        completion)
+          _arguments '1:shell:(bash zsh)'
+          ;;
+      esac
+      ;;
+  esac
+}
+
+compdef _snap2git snap2git
+ZSH_COMPLETION
+}
+
 cmd_help() {
   cat << 'HELP'
 snap2git - Git-powered snapshots for file collections
@@ -1358,11 +2079,23 @@ Commands:
   schedule <name> <min>  Schedule periodic snapshots
   schedule <name> --status  Show schedule status
   schedule <name> --remove  Remove schedule
+  tag <name> <label>     Tag the latest snapshot
+  tag <name> --list      List tags
+  tag <name> --delete L  Delete a tag
+  search <name> <pat>    Find snapshots by content changes
+  group <name> add REPO  Add repos to a group
+  group <name> remove R  Remove repo from a group
+  group --list           List all groups
+  completion <shell>     Generate shell completion (bash or zsh)
   help                   Show this help
   version                Show version
 
 Global options:
   --force                Skip config validation
+
+Init options:
+  --no-excludes          Skip preset auto-detection
+  --exclude-preset TYPE  Apply a specific exclude preset
 
 Snapshot options:
   --all, -a              Operate on all repos
@@ -1377,12 +2110,17 @@ Diff options:
   --stat                 Show summary of changes
   --name-only            Show only changed file paths
 
+Search options:
+  --regex, -r            Use regex matching (git log -G)
+  --file, -f GLOB        Restrict to files matching glob
+
 Auto-gc:
   Runs after every 50 snapshots by default. Configure per-repo:
     snap2git config <name> auto_gc_interval 100   (every 100 snapshots)
     snap2git config <name> auto_gc_interval 0     (disable)
 
 Note: When name is omitted, snapshot/status/verify/gc operate on all repos.
+      Group names work in place of repo names for these commands.
 
 Config file:
   Location: ~/.config/snap2git/config (or $SNAP2GIT_CONFIG)
@@ -1448,7 +2186,7 @@ main() {
 
   # Validate config (skip for init, help, version - they don't need valid config)
   case "$cmd" in
-    init|help|version) ;;
+    init|help|version|completion) ;;
     *)
       if ! config_validate; then
         if $force; then
@@ -1474,6 +2212,10 @@ main() {
     list)       cmd_list "$@" ;;
     config)     cmd_config "$@" ;;
     exclude)    cmd_exclude "$@" ;;
+    tag)        cmd_tag "$@" ;;
+    search)     cmd_search "$@" ;;
+    group)      cmd_group "$@" ;;
+    completion) cmd_completion "$@" ;;
     help|-h)    cmd_help ;;
     version|-v) echo "snap2git $SNAP2GIT_VERSION" ;;
     *)

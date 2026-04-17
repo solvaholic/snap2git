@@ -94,25 +94,40 @@ writes to your cloud folder, even for restores. The original plan had a
 ## v0.5 - Usability
 
 ### Smart init
-- `snap2git init` could detect files that a preset would exclude (e.g.
-  `.obsidian/`, `.cache/`, `full-text-search.db`) and suggest applying the
-  relevant preset
-- Design questions to resolve: auto-apply and tell user how to undo? Stop
-  and ask? Offer `--exclude-presets TYPE` and `--no-excludes` flags?
-- For now, users discover presets via `snap2git exclude <name> --preset`
+- `snap2git init` detects files that a preset would exclude (e.g.
+  `.obsidian/`, `metadata.db`) and auto-applies the relevant preset
+- Prints what was applied and how to undo (`snap2git exclude <name> --edit`)
+- Detection is root-only (no recursive scan) to avoid false positives
+- `--no-excludes` flag skips all preset auto-detection
+- `--exclude-preset <type>` flag to explicitly apply a preset at init time
 
 ### Shell completion
-- bash completion for commands, repo names, and flags
-- zsh completion
+- `snap2git completion bash` prints a bash completion script to stdout
+- `snap2git completion zsh` prints a native zsh completion script
+- Completions cover commands, repo names, group names, flags, and preset names
+- Setup: `eval "$(snap2git completion bash)"` in .bashrc (or zsh equivalent)
 
 ### Snapshot tagging and search
 - `snap2git tag <name> <label>` - tag the latest snapshot
-- `snap2git search <name> <pattern>` - find snapshots where a file
-  matched a pattern (wraps `git log -S` / `git log -G`)
+- `snap2git tag <name> --list` / `--delete <label>`
+- `snap2git search <name> <pattern>` - find snapshots where content changed
+  (wraps `git log -S` by default, `--regex` for `git log -G`)
+- `snap2git search <name> --file <glob>` to restrict search to matching files
 
-### Multiple worktrees per repo
-- Allow a single named repo to track multiple source directories
-  (e.g. iCloud Notes + OneDrive Documents in one history)
+### Repo groups
+- Named groups of repos, operated on together. Replaces the original
+  "multiple worktrees per repo" concept with a simpler solution.
+- Config: `[group:foo]` section with `repos = bar,baz`
+- `snap2git group <name> add <repo>` / `remove` / `--list`
+- Group names work in place of repo names for commands that support `--all`:
+  snapshot, status, verify, gc
+
+### Deferred
+- Multiple worktrees per repo (tracking multiple source directories in a
+  single Git history) was replaced by repo groups. The real use case was
+  "act on these repos together", which groups solve without Git plumbing
+  changes. True multi-worktree may be revisited if a unified-history use
+  case emerges.
 
 
 ## Design notes

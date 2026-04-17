@@ -108,8 +108,8 @@ load test_helper
 
 # --- Version bump ---
 
-@test "version: reports 0.4.0" {
+@test "version: reports 0.5.0" {
   run bash "$SNAP2GIT" version
   [ "$status" -eq 0 ]
-  [[ "$output" == *"0.4.0"* ]]
+  [[ "$output" == *"0.5.0"* ]]
 }
