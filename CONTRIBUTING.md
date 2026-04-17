@@ -11,6 +11,17 @@ snap2git is a single Bash script with no build step. You just need:
 - **ShellCheck** for linting: `brew install shellcheck` (macOS) or
   `sudo apt-get install shellcheck` (Ubuntu)
 
+## Contribution Workflow
+
+All changes to `main` go through pull requests. Direct pushes are blocked by
+branch protection.
+
+1. Create a branch: `git checkout -b my-feature`
+2. Make your changes
+3. Run checks locally: `bash -n snap2git && shellcheck snap2git && bats tests/`
+4. Push and open a PR
+5. CI must pass before merging
+
 ## Running Checks Locally
 
 ```bash
@@ -86,6 +97,15 @@ Write tests when you:
 | `tests/config.bats` | Comment handling, validation, config subcommand |
 | `tests/exclude.bats` | Exclude add/list/reset, presets |
 | `tests/multi_repo.bats` | Multi-repo operations, continue-on-failure |
+| `tests/diff.bats` | Diff between snapshots, --stat, --name-only |
+| `tests/checkout.bats` | Checkout to temp dir, --list, --cleanup |
+| `tests/gc.bats` | Garbage collection, auto-gc, binary attributes |
+| `tests/info.bats` | Repo statistics, extension breakdown |
+| `tests/schedule.bats` | Scheduled snapshots (launchd/cron) |
+| `tests/smart_init.bats` | Auto-detect and apply exclude presets at init |
+| `tests/tag.bats` | Snapshot tagging (tag/list/delete) |
+| `tests/search.bats` | Content search (string/regex/file filter) |
+| `tests/group.bats` | Repo groups (add/remove, batch operations) |
 
 Add new test files for new feature areas. Load the helper at the top:
 
@@ -148,6 +168,13 @@ echo "  myapp    - Brief description"
 ```
 
 4. Document it in the README preset table.
+
+5. If the preset has detectable file signatures, add them to
+   `preset_detect_signatures()` in `snap2git` so smart init can auto-apply it:
+
+```bash
+echo "myapp:distinctive-file-or-dir"
+```
 
 ### Preset Conventions
 

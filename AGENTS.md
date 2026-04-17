@@ -9,12 +9,13 @@ no `.git` directory in the source, no copies, no syncing.
 
 ## Key files
 
-- `snap2git` - The entire CLI. Single Bash script, ~1000 lines. Commands:
-  init, snapshot, status, log, diff, checkout, verify, list, config, exclude.
+- `snap2git` - The entire CLI. Single Bash script. Commands: init, snapshot,
+  status, log, diff, checkout, verify, list, config, exclude, gc, info,
+  schedule, tag, search, group, completion.
 - `README.md` - User-facing docs: quick start, commands, config, excludes,
-  presets, multi-repo operations.
+  presets, multi-repo operations, groups, tagging, search, completion.
 - `CONTRIBUTING.md` - Developer guide: running tests, writing presets, writing
-  tests.
+  tests, contribution workflow.
 - `docs/PLAN.md` - Roadmap from v0 through v0.5. Defines what's shipped, what's
   next, and design constraints.
 - `tests/` - bats-core integration tests. Each test creates a real snapshot repo
@@ -35,8 +36,13 @@ no `.git` directory in the source, no copies, no syncing.
   written to `info/exclude` at init time. Users extend them with `exclude`.
 - Exclude presets are functions named `preset_<name>()` that emit patterns.
   Adding a preset means adding one function.
-- Multi-repo commands (`snapshot`, `status`, `verify`) use `run_for_all()`
+- Multi-repo commands (`snapshot`, `status`, `verify`, `gc`) use `run_for_all()`
   which runs each repo in a subshell so `die()` in one doesn't kill the batch.
+  `run_for_group()` does the same for named groups.
+- Repo groups are stored in config as `[group:<name>]` sections with a
+  `repos` key (comma-separated). `is_group()` resolves names at dispatch time.
+- Shell completion scripts (bash and zsh) are embedded in the main script and
+  printed to stdout by `cmd_completion`.
 - Signal trapping cleans up temp files on EXIT/INT/TERM. Temp files are
   tracked in the `SNAP2GIT_TMPFILES` array.
 
@@ -54,8 +60,7 @@ no `.git` directory in the source, no copies, no syncing.
 
 ## Current version
 
-v0.3 is shipped. See `docs/PLAN.md` for v0.4+ roadmap items (fswatch,
-scheduled snapshots, garbage collection).
+v0.5 is shipped. See `docs/PLAN.md` for the full roadmap.
 
 ## Testing
 
@@ -75,5 +80,17 @@ See `CONTRIBUTING.md` for details on writing tests and presets.
   handles both, but check if adding new file-size logic.
 - In `set -e` bash scripts, `[[ cond ]] && die` at the end of a function
   returns 1 when the condition is false. Always use `if/then` instead.
+  Same applies to `grep` in pipelines - append `|| true` when empty output
+  is expected, or the script will exit silently.
 - Multi-repo commands run each repo in a subshell. Side effects (like setting
   variables) won't propagate back to the caller.
+
+## Contribution workflow
+
+- **All changes go through pull requests.** Direct pushes to `main` are blocked
+  by branch protection.
+- Create a feature branch, make changes, push, open a PR.
+- CI must pass (syntax check, shellcheck, bats tests) before merging.
+- Keep commits focused. One logical change per PR when practical.
+- Run `bash -n snap2git && shellcheck snap2git && bats tests/` locally before
+  pushing to catch issues early.
