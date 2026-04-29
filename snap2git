@@ -7,7 +7,7 @@
 #
 set -euo pipefail
 
-SNAP2GIT_VERSION="0.5.0"
+SNAP2GIT_VERSION="0.5.1"
 SNAP2GIT_HOME="${SNAP2GIT_HOME:-$HOME/.snap2git}"
 SNAP2GIT_CONFIG="${SNAP2GIT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/snap2git/config}"
 LARGE_FILE_WARN_BYTES=$((50 * 1024 * 1024))  # 50 MB
@@ -861,6 +861,7 @@ _snapshot_one() {
   add_stderr=$(mktemp)
   SNAP2GIT_TMPFILES+=("$add_stderr")
   local add_failed=false
+  local tcc_suspected=false
 
   if ! snap_git "$name" add -A 2>"$add_stderr"; then
     add_failed=true
@@ -869,6 +870,9 @@ _snapshot_one() {
   # If add failed, check if it's file-level (locked/unreadable) or structural
   if $add_failed; then
     if grep -qi "permission denied\|unable to index\|could not read" "$add_stderr" 2>/dev/null; then
+      if grep -qi "operation not permitted\|could not open directory" "$add_stderr" 2>/dev/null; then
+        tcc_suspected=true
+      fi
       warn "Some files could not be staged, retrying in 2s..."
       sleep 2
       local retry_stderr
@@ -878,6 +882,9 @@ _snapshot_one() {
         if grep -qi "permission denied\|unable to index\|could not read" "$retry_stderr" 2>/dev/null; then
           warn "Some files still locked/unreadable after retry:"
           cat "$retry_stderr" >&2
+          if grep -qi "operation not permitted\|could not open directory" "$retry_stderr" 2>/dev/null; then
+            tcc_suspected=true
+          fi
           # Continue with whatever was staged
         else
           # Structural git error on retry
@@ -890,6 +897,16 @@ _snapshot_one() {
       cat "$add_stderr" >&2
       die "git add failed for '$name'"
     fi
+  fi
+
+  # On macOS, "Operation not permitted" on a directory walk almost always
+  # means TCC (Full Disk Access) is blocking the process - common when
+  # snap2git is invoked from launchd, which does not inherit Terminal's
+  # FDA grant. Surface a hint so the cause isn't a mystery.
+  if $tcc_suspected && [[ "$(uname -s)" == "Darwin" ]]; then
+    warn "hint: 'Operation not permitted' on macOS usually means the process lacks Full Disk Access."
+    warn "      Scheduled (launchd) runs do not inherit Terminal's FDA grant."
+    warn "      See README section 'Scheduled snapshots on macOS' for options."
   fi
 
   # Check if anything was actually staged
