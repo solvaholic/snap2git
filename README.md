@@ -109,6 +109,39 @@ files are edited on different platforms.
 | `completion bash` | Print bash completion script |
 | `completion zsh` | Print zsh completion script |
 
+### Scheduled snapshots on macOS
+
+If your worktree lives in a TCC-protected location (iCloud Mobile
+Documents, Desktop, Documents, Downloads, etc.), scheduled runs may
+fail even when manual `snap2git snapshot` works. The log will show:
+
+```
+warning: could not open directory '.': Operation not permitted
+error: open("..."): Operation not permitted
+warning: No files could be staged for '<name>' (all may be locked).
+```
+
+**Why:** macOS Transparency, Consent, and Control (TCC) gates access to
+those folders. Your Terminal app has been granted Full Disk Access
+(FDA), so interactive runs work. `launchd`-spawned processes do not
+inherit that grant - the interpreter (`/bin/bash`) runs without it.
+
+snap2git only reads from the worktree (it never writes back), so this
+is purely a read-permission issue.
+
+**Options to resolve:**
+
+- Grant Full Disk Access to the interpreter (e.g. `/bin/bash` or
+  `/opt/homebrew/bin/bash`) under System Settings -> Privacy & Security
+  -> Full Disk Access, then reload the launchd job. Simple but broad -
+  any bash-based launchd job inherits FDA.
+- Wrap snap2git in a dedicated launcher binary you control, and grant
+  FDA only to that binary. More setup, narrower scope.
+- Move the worktree out of the protected location, or stop scheduling
+  that specific repo and snapshot it manually.
+
+snap2git does not pick one for you; the trade-offs are yours.
+
 ## Multi-repo Operations
 
 When you omit the repo name, `snapshot`, `status`, and `verify` operate on
