@@ -94,3 +94,16 @@ See `CONTRIBUTING.md` for details on writing tests and presets.
 - Keep commits focused. One logical change per PR when practical.
 - Run `bash -n snap2git && shellcheck snap2git && bats tests/` locally before
   pushing to catch issues early.
+
+## Releasing
+
+- Bump `SNAP2GIT_VERSION` in `snap2git` and update the matching version
+  assertion in `tests/error_handling.bats` (the `version: reports X.Y.Z`
+  test) in the same commit. The release workflow verifies the pushed tag
+  matches `SNAP2GIT_VERSION` and will fail if they drift.
+- Land the bump (and any release-worthy changes) on `main` via PR, then
+  tag `vX.Y.Z` on the merge commit and push the tag. `release.yml`
+  handles the GitHub Release and asset upload.
+- Before bumping, `grep -rn "X.Y.Z"` to catch any other references that
+  pin the old version string.
+
