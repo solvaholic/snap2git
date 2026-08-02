@@ -91,7 +91,7 @@ writes to your cloud folder, even for restores. The original plan had a
   in a future version as an optional feature.
 
 
-## v0.5 - Usability
+## v0.5 - Usability (shipped)
 
 ### Smart init
 - `snap2git init` detects files that a preset would exclude (e.g.
