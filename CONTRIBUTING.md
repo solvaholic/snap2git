@@ -1,10 +1,31 @@
 # Contributing to snap2git
 
+Thanks for taking a look - contributions are welcome, whether that's a bug report, a docs fix, a new exclude preset, or a feature. snap2git is a small, single-file Bash CLI, so there's not much to learn before you can be productive, and you don't need to be a Bash expert to help.
+
+New here? A good path:
+
+- [`README.md`](README.md) - what snap2git does and how to use it.
+- [`AGENTS.md`](AGENTS.md) - repo orientation, architecture, and gotchas.
+- [`docs/PLAN.md`](docs/PLAN.md) - the roadmap and what's shipped vs. deferred.
+- [`docs/TRIAGE.md`](docs/TRIAGE.md) - how issues get labeled and milestoned.
+- [`docs/RELEASING.md`](docs/RELEASING.md) - how a release is cut.
+
+If anything here is unclear or a step doesn't work as written, that's a bug in the docs - please open an issue or send a PR.
+
+## Reporting Issues and Asking Questions
+
+- **Found a bug?** Open an issue with what you ran, what you expected, and what happened. Include your OS, Bash version (`bash --version`), and Git version (`git --version`). A snippet of the failing command and its output goes a long way.
+- **Have an idea or a question?** Open an issue - questions are fine, and they often surface missing docs. There are no wrong questions here.
+- **Before filing:** a quick search of open and closed issues saves everyone time and might point you at an existing thread.
+- **Security-sensitive?** snap2git is local-only (no network, no remotes), so the surface is small, but if you find something you'd rather not post publicly, note that in the issue and we'll sort out a private channel.
+
+Maintainers triage new issues against [`docs/TRIAGE.md`](docs/TRIAGE.md) - you don't need to add labels yourself.
+
 ## Development Setup
 
 snap2git is a single Bash script with no build step. You just need:
 
-- **Bash** (4.0+)
+- **Bash** (stock macOS Bash 3.2 works; Bash 4/5 on Linux is fine too)
 - **Git**
 - **bats-core** for tests: `brew install bats-core` (macOS) or
   `sudo apt-get install bats` (Ubuntu)

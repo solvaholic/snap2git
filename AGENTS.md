@@ -18,6 +18,10 @@ no `.git` directory in the source, no copies, no syncing.
   tests, contribution workflow.
 - `docs/PLAN.md` - Roadmap from v0 through v0.5. Defines what's shipped, what's
   next, and design constraints.
+- `docs/TRIAGE.md` - Issue triage checklist, label taxonomy (`semver:*`), and
+  milestone conventions.
+- `docs/RELEASING.md` - Human-facing release checklist and what the release
+  workflow automates.
 - `tests/` - bats-core integration tests. Each test creates a real snapshot repo
   in a temp directory and runs commands against it.
 
@@ -97,13 +101,22 @@ See `CONTRIBUTING.md` for details on writing tests and presets.
 
 ## Releasing
 
-- Bump `SNAP2GIT_VERSION` in `snap2git` and update the matching version
-  assertion in `tests/error_handling.bats` (the `version: reports X.Y.Z`
-  test) in the same commit. The release workflow verifies the pushed tag
-  matches `SNAP2GIT_VERSION` and will fail if they drift.
+See [`docs/RELEASING.md`](docs/RELEASING.md) for the full checklist. The essentials:
+
+- Bump `SNAP2GIT_VERSION` in `snap2git` and the matching assertion in
+  `tests/error_handling.bats` (the `version: reports X.Y.Z` test) in the same
+  commit. The release workflow verifies the pushed tag matches
+  `SNAP2GIT_VERSION` and fails if they drift.
 - Land the bump (and any release-worthy changes) on `main` via PR, then
-  tag `vX.Y.Z` on the merge commit and push the tag. `release.yml`
-  handles the GitHub Release and asset upload.
-- Before bumping, `grep -rn "X.Y.Z"` to catch any other references that
-  pin the old version string.
+  tag `vX.Y.Z` on the merge commit and push the tag. `release.yml` handles
+  the GitHub Release and asset upload.
+- Before bumping, `grep -rn "X.Y.Z"` (the old version) to catch any other
+  references that pin the old version string.
+
+## Issue triage
+
+See [`docs/TRIAGE.md`](docs/TRIAGE.md) for the checklist. Type label
+(`bug`/`enhancement`/`documentation`/`question`) + a `semver:*` release-type
+label, dup-check, `good first issue` where apt, and a milestone-or-backlog
+call. When asked to "triage #N", walk that checklist and propose changes.
 

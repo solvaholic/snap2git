@@ -20,8 +20,9 @@ chmod +x snap2git
 ./snap2git --version
 ```
 
-**Requirements:** Bash (4.0+) and Git. Both are pre-installed on macOS and most
-Linux distributions.
+**Requirements:** Bash and Git. Stock macOS Bash (3.2) works, as do modern
+Bash 4/5 on Linux. Both Bash and Git are pre-installed on macOS and most Linux
+distributions.
 
 ## Quick Start
 
@@ -97,6 +98,8 @@ files are edited on different platforms.
 | `gc --all` | GC all repos |
 | `info <name>` | Show repo statistics |
 | `schedule <name> <min>` | Schedule periodic snapshots |
+| `schedule <name> --status` | Show whether a schedule is active |
+| `schedule <name> --remove` | Remove a schedule |
 | `tag <name> <label>` | Tag the latest snapshot |
 | `tag <name> --list` | List tags |
 | `tag <name> --delete <label>` | Delete a tag |
